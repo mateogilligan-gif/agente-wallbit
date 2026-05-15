@@ -1,0 +1,487 @@
+import os
+import json
+import anthropic
+from datetime import datetime
+from database import (
+    guardar_mensaje, obtener_historial, guardar_config, obtener_config,
+    registrar_bitacora, obtener_watchlist, obtener_alertas_activas,
+    obtener_diario_trading, init_db,
+    agregar_watchlist, eliminar_watchlist,
+    crear_alerta, desactivar_alerta,
+    crear_presupuesto, obtener_presupuestos, actualizar_gasto_presupuesto,
+    crear_meta, obtener_metas, actualizar_progreso_meta,
+    guardar_trade_diario
+)
+import wallbit_client
+import brave_client
+import market_data
+
+# ─── Definición de herramientas para Anthropic Tool Use ───────────────────────
+
+TOOLS = [
+    {
+        "name": "get_checking_balance",
+        "description": "Saldo cuenta corriente Wallbit.",
+        "input_schema": {"type": "object", "properties": {}, "required": []}
+    },
+    {
+        "name": "get_stocks_balance",
+        "description": "Posiciones e inversiones Wallbit.",
+        "input_schema": {"type": "object", "properties": {}, "required": []}
+    },
+    {
+        "name": "list_transactions",
+        "description": "Transacciones recientes Wallbit.",
+        "input_schema": {"type": "object", "properties": {"limit": {"type": "integer"}}, "required": []}
+    },
+    {
+        "name": "get_asset",
+        "description": "Precio actual de un ticker.",
+        "input_schema": {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]}
+    },
+    {
+        "name": "create_trade",
+        "description": "Ejecuta orden. SOLO con SÍ/CONFIRMO explícito.",
+        "input_schema": {"type": "object", "properties": {"ticker": {"type": "string"}, "side": {"type": "string", "enum": ["buy", "sell"]}, "amount": {"type": "number"}, "order_type": {"type": "string", "enum": ["market", "limit"]}, "price": {"type": "number"}}, "required": ["ticker", "side", "amount", "order_type"]}
+    },
+    {
+        "name": "brave_search",
+        "description": "Busca noticias financieras en tiempo real.",
+        "input_schema": {"type": "object", "properties": {"query": {"type": "string"}, "tipo": {"type": "string", "enum": ["web", "news"]}}, "required": ["query"]}
+    },
+    {
+        "name": "manage_watchlist",
+        "description": "Watchlist: agregar/eliminar/listar tickers.",
+        "input_schema": {"type": "object", "properties": {"accion": {"type": "string", "enum": ["agregar", "eliminar", "listar"]}, "ticker": {"type": "string"}, "notas": {"type": "string"}}, "required": ["accion"]}
+    },
+    {
+        "name": "manage_alerts",
+        "description": "Alertas de precio: crear/eliminar/listar.",
+        "input_schema": {"type": "object", "properties": {"accion": {"type": "string", "enum": ["crear", "eliminar", "listar"]}, "ticker": {"type": "string"}, "precio": {"type": "number"}, "tipo": {"type": "string", "enum": ["minimo", "maximo"]}, "alerta_id": {"type": "integer"}}, "required": ["accion"]}
+    },
+    {
+        "name": "manage_budget",
+        "description": "Presupuesto mensual por categorías.",
+        "input_schema": {"type": "object", "properties": {"accion": {"type": "string", "enum": ["crear", "listar", "actualizar_gasto"]}, "categoria": {"type": "string"}, "limite_usd": {"type": "number"}, "monto_adicional": {"type": "number"}}, "required": ["accion"]}
+    },
+    {
+        "name": "manage_goals",
+        "description": "Metas financieras: crear/listar/actualizar.",
+        "input_schema": {"type": "object", "properties": {"accion": {"type": "string", "enum": ["crear", "listar", "actualizar_progreso"]}, "nombre": {"type": "string"}, "objetivo_usd": {"type": "number"}, "actual_usd": {"type": "number"}, "fecha_limite": {"type": "string"}}, "required": ["accion"]}
+    },
+    {
+        "name": "save_config",
+        "description": "Guarda/lee configuración (MONTO_SUELDO, PORCENTAJE_DCA, etc).",
+        "input_schema": {"type": "object", "properties": {"accion": {"type": "string", "enum": ["guardar", "leer"]}, "clave": {"type": "string"}, "valor": {"type": "string"}}, "required": ["accion", "clave"]}
+    },
+    {
+        "name": "trading_diary",
+        "description": "Diario de trades: guardar/leer historial.",
+        "input_schema": {"type": "object", "properties": {"accion": {"type": "string", "enum": ["guardar", "leer"]}, "ticker": {"type": "string"}, "accion_trade": {"type": "string"}, "precio": {"type": "number"}, "monto": {"type": "number"}, "razonamiento": {"type": "string"}, "sesgo": {"type": "string"}, "limite": {"type": "integer"}}, "required": ["accion"]}
+    },
+    {
+        "name": "yf_info",
+        "description": "Fundamentals de una acción: P/E, market cap, márgenes, crecimiento, consenso analistas.",
+        "input_schema": {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]}
+    },
+    {
+        "name": "yf_history",
+        "description": "Historial de precios y rendimiento. period: 1d,5d,1mo,3mo,6mo,1y,2y,5y.",
+        "input_schema": {"type": "object", "properties": {"ticker": {"type": "string"}, "period": {"type": "string"}}, "required": ["ticker"]}
+    },
+    {
+        "name": "yf_financials",
+        "description": "Estado de resultados anual: ingresos, utilidad neta, EBITDA.",
+        "input_schema": {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]}
+    },
+    {
+        "name": "yf_insiders",
+        "description": "Compras y ventas de insiders (directivos) de una empresa.",
+        "input_schema": {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]}
+    },
+    {
+        "name": "yf_dividends",
+        "description": "Historial de dividendos de los últimos 5 años.",
+        "input_schema": {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]}
+    },
+    {
+        "name": "fred_macro",
+        "description": "Datos macroeconómicos de la Fed: inflacion_cpi, tasa_fed, desempleo, pib, rendimiento_10y, rendimiento_2y, indice_dolar, ventas_retail, confianza_consumidor.",
+        "input_schema": {"type": "object", "properties": {"serie": {"type": "string"}, "observaciones": {"type": "integer"}}, "required": ["serie"]}
+    },
+    {
+        "name": "sec_filings",
+        "description": "Filings de SEC EDGAR: 10-K, 10-Q, 8-K. Busca por nombre de empresa.",
+        "input_schema": {"type": "object", "properties": {"company": {"type": "string"}, "form_type": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["company"]}
+    },
+    {
+        "name": "sec_facts",
+        "description": "Datos financieros oficiales de SEC por ticker: ingresos, utilidad, activos históricos.",
+        "input_schema": {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]}
+    }
+]
+
+# ─── Executor de herramientas ──────────────────────────────────────────────────
+
+def ejecutar_herramienta(nombre: str, inputs: dict) -> str:
+    """Ejecuta la herramienta solicitada por Claude y devuelve el resultado como string."""
+    try:
+        # ── Wallbit API ──
+        if nombre == "get_checking_balance":
+            resultado = wallbit_client.get_checking_balance()
+
+        elif nombre == "get_stocks_balance":
+            resultado = wallbit_client.get_stocks_balance()
+
+        elif nombre == "list_transactions":
+            limit = inputs.get("limit", 50)
+            resultado = wallbit_client.list_transactions(limit)
+
+        elif nombre == "get_asset":
+            resultado = wallbit_client.get_asset(inputs["ticker"])
+
+        elif nombre == "create_trade":
+            resultado = wallbit_client.create_trade(
+                ticker=inputs["ticker"],
+                side=inputs["side"],
+                amount=inputs["amount"],
+                order_type=inputs.get("order_type", "market"),
+                price=inputs.get("price")
+            )
+
+        # ── Búsqueda web ──
+        elif nombre == "brave_search":
+            tipo = inputs.get("tipo", "news")
+            query = inputs["query"]
+            if tipo == "news":
+                items = brave_client.search_news(query, count=5)
+            else:
+                items = brave_client.search_web(query, count=5)
+            if items:
+                resultado = {"ok": True, "data": items}
+            else:
+                resultado = {"ok": False, "error": "Sin resultados"}
+
+        # ── Watchlist ──
+        elif nombre == "manage_watchlist":
+            accion = inputs["accion"]
+            if accion == "agregar":
+                ticker = inputs.get("ticker", "").upper()
+                if not ticker:
+                    return "Error: se necesita un ticker para agregar"
+                agregar_watchlist(ticker, notas=inputs.get("notas", ""))
+                resultado = {"ok": True, "data": f"✅ {ticker} agregado a la watchlist"}
+            elif accion == "eliminar":
+                ticker = inputs.get("ticker", "").upper()
+                if not ticker:
+                    return "Error: se necesita un ticker para eliminar"
+                ok = eliminar_watchlist(ticker)
+                resultado = {"ok": True, "data": f"{'✅ ' + ticker + ' eliminado' if ok else '⚠️ ' + ticker + ' no estaba en la watchlist'}"}
+            elif accion == "listar":
+                wl = obtener_watchlist()
+                if wl:
+                    resultado = {"ok": True, "data": [{"ticker": r[0], "precio_alerta": r[1], "notas": r[2]} for r in wl]}
+                else:
+                    resultado = {"ok": True, "data": "La watchlist está vacía"}
+
+        # ── Alertas ──
+        elif nombre == "manage_alerts":
+            accion = inputs["accion"]
+            if accion == "crear":
+                ticker = inputs.get("ticker", "").upper()
+                precio = inputs.get("precio")
+                tipo = inputs.get("tipo", "minimo")
+                if not ticker or precio is None:
+                    return "Error: se necesita ticker y precio para crear alerta"
+                crear_alerta(ticker, precio, tipo)
+                resultado = {"ok": True, "data": f"✅ Alerta creada: avisar si {ticker} {'baja de' if tipo == 'minimo' else 'sube a'} ${precio}"}
+            elif accion == "eliminar":
+                alerta_id = inputs.get("alerta_id")
+                if alerta_id is None:
+                    return "Error: se necesita alerta_id para eliminar"
+                ok = desactivar_alerta(alerta_id)
+                resultado = {"ok": True, "data": f"{'✅ Alerta #' + str(alerta_id) + ' desactivada' if ok else '⚠️ No se encontró la alerta'}"}
+            elif accion == "listar":
+                alertas = obtener_alertas_activas()
+                if alertas:
+                    resultado = {"ok": True, "data": [{"id": a[0], "ticker": a[1], "precio_objetivo": a[2], "tipo": a[3]} for a in alertas]}
+                else:
+                    resultado = {"ok": True, "data": "No hay alertas activas"}
+
+        # ── Presupuesto ──
+        elif nombre == "manage_budget":
+            accion = inputs["accion"]
+            if accion == "crear":
+                categoria = inputs.get("categoria")
+                limite = inputs.get("limite_usd")
+                if not categoria or limite is None:
+                    return "Error: se necesita categoría y límite_usd"
+                crear_presupuesto(categoria, limite)
+                resultado = {"ok": True, "data": f"✅ Presupuesto '{categoria}': ${limite}/mes"}
+            elif accion == "listar":
+                presupuestos = obtener_presupuestos()
+                if presupuestos:
+                    resultado = {"ok": True, "data": presupuestos}
+                else:
+                    resultado = {"ok": True, "data": "No hay presupuestos configurados"}
+            elif accion == "actualizar_gasto":
+                categoria = inputs.get("categoria")
+                monto = inputs.get("monto_adicional")
+                if not categoria or monto is None:
+                    return "Error: se necesita categoría y monto_adicional"
+                actualizar_gasto_presupuesto(categoria, monto)
+                resultado = {"ok": True, "data": f"✅ Sumado ${monto} al gasto de '{categoria}'"}
+
+        # ── Metas ──
+        elif nombre == "manage_goals":
+            accion = inputs["accion"]
+            if accion == "crear":
+                nombre_meta = inputs.get("nombre")
+                objetivo = inputs.get("objetivo_usd")
+                if not nombre_meta or objetivo is None:
+                    return "Error: se necesita nombre y objetivo_usd"
+                crear_meta(nombre_meta, objetivo, inputs.get("fecha_limite"))
+                resultado = {"ok": True, "data": f"✅ Meta '{nombre_meta}': ${objetivo}"}
+            elif accion == "listar":
+                metas = obtener_metas()
+                if metas:
+                    resultado = {"ok": True, "data": metas}
+                else:
+                    resultado = {"ok": True, "data": "No hay metas configuradas"}
+            elif accion == "actualizar_progreso":
+                nombre_meta = inputs.get("nombre")
+                actual = inputs.get("actual_usd")
+                if not nombre_meta or actual is None:
+                    return "Error: se necesita nombre y actual_usd"
+                actualizar_progreso_meta(nombre_meta, actual)
+                resultado = {"ok": True, "data": f"✅ Progreso de '{nombre_meta}' actualizado a ${actual}"}
+
+        # ── Configuración ──
+        elif nombre == "save_config":
+            accion = inputs["accion"]
+            clave = inputs["clave"]
+            if accion == "guardar":
+                valor = inputs.get("valor")
+                if valor is None:
+                    return "Error: se necesita un valor para guardar"
+                guardar_config(clave, str(valor))
+                resultado = {"ok": True, "data": f"✅ Guardado: {clave} = {valor}"}
+            elif accion == "leer":
+                valor = obtener_config(clave)
+                resultado = {"ok": True, "data": {clave: valor if valor else "no configurado"}}
+
+        # ── Diario de trading ──
+        elif nombre == "trading_diary":
+            accion = inputs["accion"]
+            if accion == "guardar":
+                ticker = inputs.get("ticker", "")
+                accion_trade = inputs.get("accion_trade", "")
+                precio = inputs.get("precio", 0)
+                monto = inputs.get("monto", 0)
+                razonamiento = inputs.get("razonamiento", "")
+                sesgo = inputs.get("sesgo", "")
+                guardar_trade_diario(ticker, accion_trade, precio, monto, razonamiento, sesgo)
+                resultado = {"ok": True, "data": "✅ Entrada guardada en el diario de trading"}
+            elif accion == "leer":
+                limite = inputs.get("limite", 10)
+                entradas = obtener_diario_trading(limite)
+                if entradas:
+                    resultado = {"ok": True, "data": [
+                        {"fecha": e[0], "ticker": e[1], "accion": e[2], "precio": e[3], "monto": e[4], "razonamiento": e[5]}
+                        for e in entradas
+                    ]}
+                else:
+                    resultado = {"ok": True, "data": "El diario de trading está vacío"}
+
+        elif nombre == "yf_info":
+            resultado = market_data.yf_get_info(inputs["ticker"])
+        elif nombre == "yf_history":
+            resultado = market_data.yf_get_history(inputs["ticker"], inputs.get("period", "1y"))
+        elif nombre == "yf_financials":
+            resultado = market_data.yf_get_financials(inputs["ticker"])
+        elif nombre == "yf_insiders":
+            resultado = market_data.yf_get_insiders(inputs["ticker"])
+        elif nombre == "yf_dividends":
+            resultado = market_data.yf_get_dividends(inputs["ticker"])
+        elif nombre == "fred_macro":
+            resultado = market_data.fred_get_series(inputs["serie"], inputs.get("observaciones", 12))
+        elif nombre == "sec_filings":
+            resultado = market_data.sec_get_filings(inputs["company"], inputs.get("form_type", "10-K"), inputs.get("limit", 3))
+        elif nombre == "sec_facts":
+            resultado = market_data.sec_get_company_facts(inputs["ticker"])
+
+        else:
+            return f"Herramienta desconocida: {nombre}"
+
+        if resultado.get("ok"):
+            return json.dumps(resultado["data"], ensure_ascii=False, indent=2)
+        else:
+            return f"Error: {resultado.get('error', 'Error desconocido')}"
+
+    except Exception as e:
+        registrar_bitacora("error", f"Error en herramienta {nombre}: {str(e)}")
+        return f"Error ejecutando {nombre}: {str(e)}"
+
+# ─── Sistema prompt ────────────────────────────────────────────────────────────
+
+SYSTEM_PROMPT = """Agente financiero Wallbit de Mateo. Buy & hold, largo plazo.
+
+REGLAS:
+1. create_trade: SOLO con SÍ/CONFIRMO explícito. Mostrá ticket antes.
+2. Watchlist/alertas/metas: LLAMÁ la herramienta, no lo prometas.
+3. Recomendaciones: validá con brave_search + yf_info primero.
+4. Detectá sesgos (FOMO, anclaje) y avisá.
+
+TICKET antes de create_trade:
+Acción:[COMPRA/VENTA] Ticker:[X] Tipo:[MARKET/LIMIT] Monto:$[X] Riesgo:[X]
+¿Confirmás? (SÍ/NO)
+
+CAPACIDADES DE ANÁLISIS PROFESIONAL (nivel equity research institucional):
+
+EARNINGS ANALYSIS — cuando pidan análisis post-earnings:
+Usá yf_financials + brave_search para buscar el earnings call. Estructura: 1) Beat/miss vs consenso con %, 2) Métricas clave por segmento, 3) Guidance actualizado vs anterior, 4) Impacto en tesis de inversión, 5) Estimados revisados. Tono: analista sell-side de JPMorgan.
+
+EARNINGS PREVIEW — cuando pregunten antes de que reporte una empresa:
+Usá brave_search para consenso + yf_info para contexto. Armá: tabla bull/base/bear con reacción esperada del precio, 3-5 métricas clave a mirar, nivel de implied move según opciones.
+
+IDEA GENERATION / SCREEN — cuando pidan ideas o screener:
+Preguntá: dirección (long/short), market cap, sector, estilo (value/growth/quality). Corré el screen con yf_info. Presentá 5 ideas con: tesis de 3 bullets, métricas vs peers, catalizador y riesgo principal.
+
+SECTOR OVERVIEW — cuando pidan análisis de un sector:
+Usá brave_search + yf_info de los players principales. Cubrí: TAM y crecimiento, estructura competitiva (quién gana share), múltiplos de valuación históricos vs actuales, 3 tendencias seculares y 2 riesgos.
+
+THESIS TRACKER — cuando pidan revisar o armar una tesis:
+Estructura: 1) Tesis en 1 línea, 2) 3 pilares fundamentales, 3) Métricas que confirman/niegan la tesis, 4) Catalizadores próximos 6 meses, 5) Qué haría que vendas.
+
+MORNING NOTE — cuando pidan el morning briefing o nota matutina:
+Usá get_stocks_balance + brave_search + fred_macro. Formato: semáforo de mercado, 3 noticias que mueven mis posiciones, dato macro del día, 1 acción concreta."""
+
+# ─── Función principal de chat con Tool Use ───────────────────────────────────
+
+def chat(mensaje_usuario: str, contexto_extra: str = "") -> str:
+    """Procesa un mensaje usando Anthropic Tool Use para llamadas reales a Wallbit."""
+    client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+    guardar_mensaje("user", mensaje_usuario)
+    historial = obtener_historial(limite=6)
+
+    # Construir mensajes
+    messages = []
+    for h in historial[:-1]:
+        messages.append({"role": h["role"], "content": h["content"]})
+
+    contenido = mensaje_usuario
+    if contexto_extra:
+        contenido = f"{contexto_extra}\n\nMensaje: {mensaje_usuario}"
+    messages.append({"role": "user", "content": contenido})
+
+    # Loop de tool use: Claude puede llamar múltiples herramientas en secuencia
+    MAX_ITERACIONES = 10
+    for _ in range(MAX_ITERACIONES):
+        try:
+            response = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=4096,
+                system=SYSTEM_PROMPT,
+                tools=TOOLS,
+                messages=messages
+            )
+        except anthropic.APIError as e:
+            error = f"⚠️ Error de API: {str(e)}"
+            registrar_bitacora("error", error)
+            return error
+
+        # Claude terminó de responder
+        if response.stop_reason == "end_turn":
+            texto_final = ""
+            for bloque in response.content:
+                if hasattr(bloque, "text"):
+                    texto_final += bloque.text
+            guardar_mensaje("assistant", texto_final)
+            registrar_bitacora("chat", f"Usuario: {mensaje_usuario[:50]}...")
+            return texto_final
+
+        # Claude quiere usar herramientas
+        if response.stop_reason == "tool_use":
+            messages.append({"role": "assistant", "content": response.content})
+
+            resultados_tools = []
+            for bloque in response.content:
+                if bloque.type == "tool_use":
+                    resultado = ejecutar_herramienta(bloque.name, bloque.input)
+                    resultados_tools.append({
+                        "type": "tool_result",
+                        "tool_use_id": bloque.id,
+                        "content": resultado
+                    })
+                    registrar_bitacora("tool", f"Ejecuté {bloque.name}: {str(resultado)[:100]}")
+
+            messages.append({"role": "user", "content": resultados_tools})
+            continue
+
+        break
+
+    return "⚠️ No pude completar la respuesta. Intentá de nuevo."
+
+# ─── Funciones auxiliares ──────────────────────────────────────────────────────
+
+def construir_contexto_inicial() -> str:
+    watchlist = obtener_watchlist()
+    alertas = obtener_alertas_activas()
+    monto_sueldo = obtener_config("MONTO_SUELDO")
+    partes = []
+    if watchlist:
+        tickers = [w[0] for w in watchlist]
+        partes.append(f"📋 Watchlist: {', '.join(tickers)}")
+    if alertas:
+        partes.append(f"🔔 {len(alertas)} alertas de precio activas")
+    if monto_sueldo:
+        partes.append(f"💰 Inversión de sueldo configurada: ${monto_sueldo}")
+    return "\n".join(partes)
+
+def morning_briefing_automatico() -> str:
+    return chat("Dame mi Morning Briefing completo con datos reales de mi portafolio y noticias del mercado de hoy.")
+
+def verificar_alertas() -> list:
+    alertas_disparadas = []
+    alertas = obtener_alertas_activas()
+    for alerta_id, ticker, precio_objetivo, tipo in alertas:
+        resultado = wallbit_client.get_asset(ticker)
+        if resultado["ok"]:
+            try:
+                data = json.loads(resultado["data"]) if isinstance(resultado["data"], str) else resultado["data"]
+                precio_actual = float(data.get("price", 0))
+                if tipo == "minimo" and precio_actual <= precio_objetivo:
+                    alertas_disparadas.append(f"🔔 {ticker} llegó a ${precio_actual:.2f} (objetivo: ${precio_objetivo:.2f})")
+                elif tipo == "maximo" and precio_actual >= precio_objetivo:
+                    alertas_disparadas.append(f"🔔 {ticker} llegó a ${precio_actual:.2f} (objetivo: ${precio_objetivo:.2f})")
+            except Exception:
+                pass
+    return alertas_disparadas
+
+# ─── Modo consola para testing ─────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    from dotenv import load_dotenv
+    load_dotenv("config.env")
+    init_db()
+
+    print("🤖 Agente Wallbit iniciado en modo consola. Escribí 'salir' para terminar.\n")
+    ctx = construir_contexto_inicial()
+    if ctx:
+        print(f"📋 Contexto:\n{ctx}\n")
+
+    while True:
+        try:
+            user_input = input("Vos: ").strip()
+            if user_input.lower() in ["salir", "exit"]:
+                print("Agente: ¡Hasta luego!")
+                break
+            if not user_input:
+                continue
+            print("\nAgente: ", end="", flush=True)
+            print(chat(user_input))
+            print()
+        except KeyboardInterrupt:
+            print("\n\nAgente: Sesión interrumpida.")
+            break

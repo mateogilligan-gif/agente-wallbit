@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__wallbit__get_checking_balance",
+      "mcp__wallbit__get_stocks_balance",
+      "mcp__brave-search__brave_web_search"
+    ]
+  }
+}
