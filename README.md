@@ -1,6 +1,6 @@
 # 🤖 Agente Financiero Wallbit
 
-Un agente de IA financiero personal conectado a tu cuenta de [Wallbit](https://wallbit.io), con análisis de nivel institucional y acceso a datos de mercado en tiempo real. Se usa desde Telegram — le escribís como a un analista y te responde con datos reales de tu cuenta.
+Tu analista de Wall Street personal, disponible 24/7 por Telegram. Conectado en tiempo real a tu cuenta de [Wallbit](https://wallbit.io) — consultá tu portafolio, **ejecutá compras y ventas**, recibí alertas automáticas de precio, análisis de earnings nivel sell-side (JPMorgan/GS format), screener de acciones, datos macro de la Fed, filings oficiales de la SEC e insiders. Todo desde un mensaje de Telegram, gratis y open source.
 
 ## ¿Qué puede hacer?
 
