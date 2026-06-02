@@ -20,13 +20,18 @@ import market_data
 
 TOOLS = [
     {
+        "name": "get_portfolio_summary",
+        "description": "Portfolio completo: saldo corriente + todas las posiciones con ticker, cantidad de acciones, precio promedio, valor actual y P&L. Usar este en vez de get_checking_balance + get_stocks_balance por separado.",
+        "input_schema": {"type": "object", "properties": {}, "required": []}
+    },
+    {
         "name": "get_checking_balance",
-        "description": "Saldo cuenta corriente Wallbit.",
+        "description": "Solo saldo cuenta corriente Wallbit (cash disponible).",
         "input_schema": {"type": "object", "properties": {}, "required": []}
     },
     {
         "name": "get_stocks_balance",
-        "description": "Posiciones e inversiones Wallbit.",
+        "description": "Solo posiciones de inversión crudas. Preferir get_portfolio_summary.",
         "input_schema": {"type": "object", "properties": {}, "required": []}
     },
     {
@@ -118,6 +123,16 @@ TOOLS = [
         "name": "sec_facts",
         "description": "Datos financieros oficiales de SEC por ticker: ingresos, utilidad, activos históricos.",
         "input_schema": {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]}
+    },
+    {
+        "name": "yf_earnings_calendar",
+        "description": "Próxima fecha de earnings de un ticker y estimados de EPS/Revenue del consenso.",
+        "input_schema": {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]}
+    },
+    {
+        "name": "check_earnings_upcoming",
+        "description": "Chequea qué tickers del portafolio/watchlist reportan earnings en los próximos N días.",
+        "input_schema": {"type": "object", "properties": {"tickers": {"type": "array", "items": {"type": "string"}}, "days": {"type": "integer"}}, "required": ["tickers"]}
     }
 ]
 
@@ -127,7 +142,10 @@ def ejecutar_herramienta(nombre: str, inputs: dict) -> str:
     """Ejecuta la herramienta solicitada por Claude y devuelve el resultado como string."""
     try:
         # ── Wallbit API ──
-        if nombre == "get_checking_balance":
+        if nombre == "get_portfolio_summary":
+            resultado = wallbit_client.get_portfolio_summary()
+
+        elif nombre == "get_checking_balance":
             resultado = wallbit_client.get_checking_balance()
 
         elif nombre == "get_stocks_balance":
@@ -310,6 +328,15 @@ def ejecutar_herramienta(nombre: str, inputs: dict) -> str:
         elif nombre == "sec_facts":
             resultado = market_data.sec_get_company_facts(inputs["ticker"])
 
+        elif nombre == "yf_earnings_calendar":
+            resultado = market_data.yf_get_earnings_calendar(inputs["ticker"])
+
+        elif nombre == "check_earnings_upcoming":
+            resultado = market_data.check_earnings_upcoming(
+                inputs["tickers"],
+                inputs.get("days", 14)
+            )
+
         else:
             return f"Herramienta desconocida: {nombre}"
 
@@ -325,6 +352,8 @@ def ejecutar_herramienta(nombre: str, inputs: dict) -> str:
 # ─── Sistema prompt ────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """Agente financiero Wallbit de Mateo. Buy & hold, largo plazo.
+
+ESTILO: Respuestas cortas y directas. Sin emojis. Sin frases de relleno. Solo datos y conclusiones.
 
 REGLAS:
 1. create_trade: SOLO con SÍ/CONFIRMO explícito. Mostrá ticket antes.
@@ -381,7 +410,7 @@ def chat(mensaje_usuario: str, contexto_extra: str = "") -> str:
         try:
             response = client.messages.create(
                 model="claude-sonnet-4-6",
-                max_tokens=4096,
+                max_tokens=2048,
                 system=SYSTEM_PROMPT,
                 tools=TOOLS,
                 messages=messages
@@ -391,8 +420,8 @@ def chat(mensaje_usuario: str, contexto_extra: str = "") -> str:
             registrar_bitacora("error", error)
             return error
 
-        # Claude terminó de responder
-        if response.stop_reason == "end_turn":
+        # Claude terminó de responder (end_turn o max_tokens)
+        if response.stop_reason in ("end_turn", "max_tokens"):
             texto_final = ""
             for bloque in response.content:
                 if hasattr(bloque, "text"):
@@ -441,6 +470,53 @@ def construir_contexto_inicial() -> str:
 
 def morning_briefing_automatico() -> str:
     return chat("Dame mi Morning Briefing completo con datos reales de mi portafolio y noticias del mercado de hoy.")
+
+def verificar_earnings_portfolio(days: int = 7) -> list:
+    """
+    Extrae tickers del portafolio de Wallbit y verifica cuáles reportan
+    earnings en los próximos `days` días. Retorna lista de strings listos
+    para enviar por Telegram.
+    """
+    mensajes = []
+    try:
+        # Obtener tickers del portafolio
+        res = wallbit_client.get_stocks_balance()
+        if not res.get("ok"):
+            return []
+
+        data = res["data"]
+        raw = data if isinstance(data, str) else json.dumps(data)
+
+        # Usar el parser de wallbit_client para extraer tickers limpios
+        posiciones = wallbit_client._parse_portfolio_text(raw)
+        tickers = [p["ticker"] for p in posiciones if p.get("ticker")]
+
+        # También chequear la watchlist
+        watchlist = obtener_watchlist()
+        for w in watchlist:
+            if w[0] not in tickers:
+                tickers.append(w[0])
+
+        if not tickers:
+            return []
+
+        # Verificar earnings
+        resultado = market_data.check_earnings_upcoming(tickers, days=days)
+        if not resultado["ok"] or not resultado["data"]:
+            return []
+
+        for item in resultado["data"]:
+            eps_str = f" | EPS est. ${item['eps_estimado']:.2f}" if item.get("eps_estimado") else ""
+            dias_str = "HOY" if item["dias_faltan"] == 0 else f"en {item['dias_faltan']} dias"
+            mensajes.append(
+                f"[EARNINGS] {item['ticker']} ({item['nombre']}) reporta {dias_str} — {item['fecha']}{eps_str}"
+            )
+
+    except Exception as e:
+        registrar_bitacora("error", f"Error verificando earnings: {str(e)}")
+
+    return mensajes
+
 
 def verificar_alertas() -> list:
     alertas_disparadas = []

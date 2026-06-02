@@ -1,5 +1,6 @@
 import os
 import logging
+from datetime import time as dtime
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 from dotenv import load_dotenv
@@ -76,6 +77,18 @@ async def watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await enviar_respuesta_larga(update, respuesta)
 
 
+async def earnings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not es_autorizado(update):
+        return
+    await update.message.reply_text("Chequeando earnings de tu portafolio...")
+    proximos = agente.verificar_earnings_portfolio(days=14)
+    if proximos:
+        texto = "EARNINGS PROXIMOS (14 dias)\n\n" + "\n".join(proximos)
+    else:
+        texto = "Ninguna empresa de tu portafolio reporta earnings en los proximos 14 dias."
+    await enviar_respuesta_larga(update, texto)
+
+
 async def ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not es_autorizado(update):
         return
@@ -85,6 +98,7 @@ async def ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/balance – Saldo e inversiones\n"
         "/alertas – Verificar alertas de precio\n"
         "/watchlist – Ver precios de tu watchlist\n"
+        "/earnings – Earnings próximos de tu portafolio\n"
         "/ayuda – Esta ayuda\n\n"
         "También podés escribirme directamente cualquier consulta financiera 💬"
     )
@@ -109,6 +123,14 @@ async def verificar_alertas_periodico(context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=AUTHORIZED_USER_ID, text=texto, parse_mode="Markdown")
 
 
+async def earnings_diarios(context: ContextTypes.DEFAULT_TYPE):
+    """Chequea earnings del portafolio cada mañana a las 8am Argentina (UTC-3 = 11:00 UTC)."""
+    proximos = agente.verificar_earnings_portfolio(days=7)
+    if proximos and AUTHORIZED_USER_ID:
+        texto = "EARNINGS ESTA SEMANA\n\n" + "\n".join(proximos)
+        await context.bot.send_message(chat_id=AUTHORIZED_USER_ID, text=texto)
+
+
 def main():
     init_db()
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
@@ -118,11 +140,15 @@ def main():
     app.add_handler(CommandHandler("balance", balance))
     app.add_handler(CommandHandler("alertas", alertas))
     app.add_handler(CommandHandler("watchlist", watchlist))
+    app.add_handler(CommandHandler("earnings", earnings))
     app.add_handler(CommandHandler("ayuda", ayuda))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, mensaje_libre))
 
     # Verificar alertas cada 30 minutos
     app.job_queue.run_repeating(verificar_alertas_periodico, interval=1800, first=60)
+
+    # Earnings diarios a las 8:00am Argentina (11:00 UTC)
+    app.job_queue.run_daily(earnings_diarios, time=dtime(hour=11, minute=0))
 
     logger.info("🤖 Agente Wallbit iniciado vía Telegram.")
     app.run_polling()

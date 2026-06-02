@@ -105,6 +105,88 @@ def yf_get_dividends(ticker: str) -> dict:
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+def yf_get_earnings_calendar(ticker: str) -> dict:
+    """Próxima fecha de earnings y estimados de EPS/Revenue del consenso."""
+    try:
+        import yfinance as yf
+        t = yf.Ticker(ticker)
+        cal = t.calendar
+        info = t.info
+
+        if cal is None or (hasattr(cal, 'empty') and cal.empty):
+            return {"ok": False, "error": f"Sin datos de earnings para {ticker}"}
+
+        result = {}
+
+        # calendar puede ser dict o DataFrame según versión de yfinance
+        if isinstance(cal, dict):
+            earnings_dates = cal.get("Earnings Date", [])
+            if earnings_dates:
+                if isinstance(earnings_dates, list):
+                    fecha = str(earnings_dates[0])[:10]
+                else:
+                    fecha = str(earnings_dates)[:10]
+                result["fecha_earnings"] = fecha
+            result["eps_estimado_avg"] = cal.get("Earnings Average")
+            result["eps_estimado_low"] = cal.get("Earnings Low")
+            result["eps_estimado_high"] = cal.get("Earnings High")
+            result["revenue_estimado_avg"] = cal.get("Revenue Average")
+        else:
+            # DataFrame: columnas son las fechas, filas son las métricas
+            try:
+                cols = [str(c)[:10] for c in cal.columns.tolist()]
+                result["fecha_earnings"] = cols[0] if cols else None
+                if "Earnings Average" in cal.index:
+                    result["eps_estimado_avg"] = float(cal.loc["Earnings Average"].iloc[0])
+                if "Revenue Average" in cal.index:
+                    result["revenue_estimado_avg"] = float(cal.loc["Revenue Average"].iloc[0])
+            except Exception:
+                pass
+
+        # Enriquecer con datos del info
+        result["nombre"] = info.get("shortName", ticker)
+        result["eps_ultimo_real"] = info.get("trailingEps")
+        result["eps_proximo_estimado"] = info.get("forwardEps")
+        result["precio_actual"] = info.get("currentPrice")
+
+        if not result.get("fecha_earnings"):
+            return {"ok": False, "error": f"No hay fecha de earnings próxima para {ticker}"}
+
+        return {"ok": True, "data": result}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def check_earnings_upcoming(tickers: list, days: int = 14) -> dict:
+    """Verifica cuáles de los tickers dados tienen earnings en los próximos N días."""
+    from datetime import date, timedelta
+    hoy = date.today()
+    limite = hoy + timedelta(days=days)
+    upcoming = []
+
+    for ticker in tickers:
+        try:
+            res = yf_get_earnings_calendar(ticker)
+            if res["ok"] and res["data"].get("fecha_earnings"):
+                fecha_str = res["data"]["fecha_earnings"]
+                fecha = date.fromisoformat(fecha_str[:10])
+                if hoy <= fecha <= limite:
+                    upcoming.append({
+                        "ticker": ticker,
+                        "nombre": res["data"].get("nombre", ticker),
+                        "fecha": fecha_str[:10],
+                        "dias_faltan": (fecha - hoy).days,
+                        "eps_estimado": res["data"].get("eps_estimado_avg"),
+                        "revenue_estimado": res["data"].get("revenue_estimado_avg"),
+                        "precio_actual": res["data"].get("precio_actual")
+                    })
+        except Exception:
+            continue
+
+    upcoming.sort(key=lambda x: x["fecha"])
+    return {"ok": True, "data": upcoming if upcoming else []}
+
+
 def yf_get_options(ticker: str) -> dict:
     """Fechas de vencimiento de opciones disponibles."""
     try:
