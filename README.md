@@ -49,7 +49,7 @@ Usa la API pública de Wallbit + Claude (Anthropic) como cerebro + fuentes de da
 
 ## Requisitos
 
-- Mac con Python 3.10+
+- Python 3.10+ (Mac, Linux o Windows)
 - Cuenta en [Wallbit](https://wallbit.io)
 - Cuenta en [Telegram](https://telegram.org)
 - API keys (ver instalación)
@@ -98,14 +98,61 @@ bash instalar.sh
 cd ~/agente-wallbit && python3 telegram_bot.py
 ```
 
-### 5. Arranque automático al encender la Mac (opcional)
+### 5. Arranque automático (opcional)
 
+**Mac:**
 ```bash
 cp ~/agente-wallbit/com.agente.wallbit.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.agente.wallbit.plist
 ```
 
-El bot arranca solo en cada inicio de sesión. No necesitás tener la terminal abierta.
+**Linux:**
+```bash
+# Crear el servicio
+sudo nano /etc/systemd/system/agente-wallbit.service
+```
+Contenido del archivo:
+```
+[Unit]
+Description=Agente Wallbit
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /home/TU_USUARIO/agente-wallbit/telegram_bot.py
+WorkingDirectory=/home/TU_USUARIO/agente-wallbit
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+```bash
+sudo systemctl enable agente-wallbit
+sudo systemctl start agente-wallbit
+```
+
+**Windows:**
+Buscá "Programador de tareas" en el menú inicio, creá una tarea nueva que ejecute `python telegram_bot.py` al iniciar sesión.
+
+El bot arranca solo en cada inicio. No necesitás tener la terminal abierta.
+
+---
+
+## Despliegue en la nube (sin depender de tu computadora)
+
+Si no querés tener el bot corriendo en tu máquina, podés desplegarlo en [Railway](https://railway.app) — es la opción más simple y tiene un plan gratis para empezar.
+
+### Railway (recomendado)
+
+1. Creá una cuenta en [railway.app](https://railway.app)
+2. Nuevo proyecto → Deploy from GitHub repo → seleccioná `agente-wallbit`
+3. En Variables, cargá las mismas keys de tu `config.env`
+4. En Settings → Deploy → Start Command:
+```
+python telegram_bot.py
+```
+5. Deploy. El bot corre 24/7 sin necesitar tu computadora prendida.
+
+> **Costo estimado:** Railway cobra ~$5/mes en el plan Hobby. DigitalOcean y Render son alternativas similares.
 
 ---
 
