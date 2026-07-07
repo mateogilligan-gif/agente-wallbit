@@ -34,7 +34,8 @@ def _initialize():
         response.raise_for_status()
         _initialized = True
         return True
-    except Exception:
+    except Exception as e:
+        _initialized = False  # Siempre resetear para reintentar en el próximo mensaje
         return False
 
 def _call_tool(tool_name: str, params: Optional[dict] = None) -> dict:
