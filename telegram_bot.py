@@ -89,6 +89,21 @@ async def earnings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await enviar_respuesta_larga(update, texto)
 
 
+async def debate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Debate Bull vs Bear de un ticker. Uso: /debate AAPL"""
+    if not es_autorizado(update):
+        return
+    args = context.args
+    if not args:
+        await update.message.reply_text("Uso: /debate TICKER\nEjemplo: /debate NVDA")
+        return
+    ticker = args[0].upper()
+    contexto_extra = " ".join(args[1:]) if len(args) > 1 else ""
+    await update.message.reply_text(f"Armando debate Bull vs Bear de {ticker}...")
+    resultado = agente._ejecutar_bull_bear(ticker, contexto_extra)
+    await enviar_respuesta_larga(update, resultado)
+
+
 async def ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not es_autorizado(update):
         return
@@ -99,6 +114,7 @@ async def ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/alertas – Verificar alertas de precio\n"
         "/watchlist – Ver precios de tu watchlist\n"
         "/earnings – Earnings próximos de tu portafolio\n"
+        "/debate TICKER – Bull vs Bear de una acción\n"
         "/ayuda – Esta ayuda\n\n"
         "También podés escribirme directamente cualquier consulta financiera 💬"
     )
@@ -141,6 +157,7 @@ def main():
     app.add_handler(CommandHandler("alertas", alertas))
     app.add_handler(CommandHandler("watchlist", watchlist))
     app.add_handler(CommandHandler("earnings", earnings))
+    app.add_handler(CommandHandler("debate", debate))
     app.add_handler(CommandHandler("ayuda", ayuda))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, mensaje_libre))
 

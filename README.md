@@ -40,6 +40,11 @@ Usa la API pública de Wallbit + Claude (Anthropic) como cerebro + fuentes de da
 - Presupuesto mensual por categorías
 - Morning Briefing: resumen diario de portfolio + mercado + macro
 
+**Análisis estructurado**
+- Decision Log: registra automáticamente cada análisis (veredicto + precio + razonamiento) para comparar si la tesis fue correcta en el próximo análisis del mismo ticker
+- Bull vs Bear: debate estructurado con dos argumentos opuestos sobre un mismo ticker — el veredicto es tuyo
+- Profundidad configurable: "análisis rápido de X" (1 búsqueda) o "análisis profundo de X" (3 búsquedas + financials + SEC)
+
 **Ejecución de órdenes**
 - Comprá y vendé acciones directamente desde Telegram
 - Siempre pide confirmación explícita antes de ejecutar
@@ -183,6 +188,7 @@ Escribile a tu bot en Telegram en lenguaje natural:
 | `/balance` | Ver saldo y posiciones |
 | `/briefing` | Morning Briefing completo |
 | `/earnings` | Earnings próximos de tu portfolio (14 días) |
+| `/debate TICKER` | Debate Bull vs Bear de una acción |
 | `/alertas` | Ver alertas de precio activas |
 | `/watchlist` | Ver watchlist con precios actuales |
 | `/ayuda` | Lista de comandos |
@@ -204,6 +210,8 @@ agente-wallbit/
 ```
 
 El bot usa el patrón **Anthropic Tool Use**: Claude decide qué herramientas llamar, Python las ejecuta con datos reales, y Claude interpreta los resultados. Cada respuesta está basada en datos reales de tu cuenta y del mercado, no en estimaciones.
+
+El módulo **Bull vs Bear** hace dos llamadas separadas a Claude con instrucciones opuestas (alcista y bajista) para forzar análisis sin sesgo de confirmación. El **Decision Log** registra cada veredicto con precio y razonamiento, y los cruza con el próximo análisis del mismo ticker para saber si la tesis fue correcta.
 
 ---
 

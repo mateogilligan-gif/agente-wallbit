@@ -10,7 +10,8 @@ from database import (
     crear_alerta, desactivar_alerta,
     crear_presupuesto, obtener_presupuestos, actualizar_gasto_presupuesto,
     crear_meta, obtener_metas, actualizar_progreso_meta,
-    guardar_trade_diario
+    guardar_trade_diario,
+    guardar_decision, obtener_decisiones_ticker, actualizar_resultado_decision
 )
 import wallbit_client
 import brave_client
@@ -133,6 +134,16 @@ TOOLS = [
         "name": "check_earnings_upcoming",
         "description": "Chequea qué tickers del portafolio/watchlist reportan earnings en los próximos N días.",
         "input_schema": {"type": "object", "properties": {"tickers": {"type": "array", "items": {"type": "string"}}, "days": {"type": "integer"}}, "required": ["tickers"]}
+    },
+    {
+        "name": "decision_log",
+        "description": "Guarda o lee el historial de análisis sobre un ticker. Guardar: registra veredicto (alcista/bajista/neutral) + razonamiento + precio actual. Leer: muestra análisis anteriores sobre ese ticker para validar si la tesis fue correcta.",
+        "input_schema": {"type": "object", "properties": {"accion": {"type": "string", "enum": ["guardar", "leer"]}, "ticker": {"type": "string"}, "precio_momento": {"type": "number"}, "veredicto": {"type": "string", "enum": ["alcista", "bajista", "neutral"]}, "razonamiento": {"type": "string"}, "resultado": {"type": "string"}}, "required": ["accion", "ticker"]}
+    },
+    {
+        "name": "bull_bear_analysis",
+        "description": "Ejecuta un debate estructurado Bull vs Bear sobre un ticker: dos análisis opuestos con argumentos concretos. Usar cuando el usuario pide debate, análisis profundo, o 'convenceme/no me convenzas' de una acción.",
+        "input_schema": {"type": "object", "properties": {"ticker": {"type": "string"}, "contexto": {"type": "string"}}, "required": ["ticker"]}
     }
 ]
 
@@ -337,6 +348,29 @@ def ejecutar_herramienta(nombre: str, inputs: dict) -> str:
                 inputs.get("days", 14)
             )
 
+        # ── Decision Log ──
+        elif nombre == "decision_log":
+            accion = inputs["accion"]
+            ticker = inputs["ticker"].upper()
+            if accion == "guardar":
+                veredicto = inputs.get("veredicto", "neutral")
+                razonamiento = inputs.get("razonamiento", "")
+                precio = inputs.get("precio_momento", 0)
+                guardar_decision(ticker, precio, veredicto, razonamiento)
+                resultado = {"ok": True, "data": f"Decision guardada: {ticker} — {veredicto}"}
+            elif accion == "leer":
+                historial = obtener_decisiones_ticker(ticker, limite=5)
+                if historial:
+                    resultado = {"ok": True, "data": historial}
+                else:
+                    resultado = {"ok": True, "data": f"Sin historial previo de decisiones para {ticker}"}
+
+        # ── Bull vs Bear ──
+        elif nombre == "bull_bear_analysis":
+            ticker = inputs["ticker"].upper()
+            contexto = inputs.get("contexto", "")
+            resultado = {"ok": True, "data": _ejecutar_bull_bear(ticker, contexto)}
+
         else:
             return f"Herramienta desconocida: {nombre}"
 
@@ -351,6 +385,64 @@ def ejecutar_herramienta(nombre: str, inputs: dict) -> str:
 
 # ─── Sistema prompt ────────────────────────────────────────────────────────────
 
+def _ejecutar_bull_bear(ticker: str, contexto: str = "") -> str:
+    """
+    Hace dos llamadas separadas a Claude Haiku con instrucciones opuestas:
+    una para el caso alcista y otra para el bajista. Devuelve el debate completo.
+    """
+    client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+    prompt_base = f"Analizá {ticker} como analista financiero senior. {contexto}".strip()
+
+    # Buscar datos básicos de noticias para ambos
+    noticias = ""
+    try:
+        items = brave_client.search_news(f"{ticker} stock news 2025", count=4)
+        if items:
+            noticias = "\n".join([f"- {n.get('titulo', '')} ({n.get('fuente', '')})" for n in items[:4]])
+    except Exception:
+        pass
+
+    contexto_mercado = f"\nNoticias recientes:\n{noticias}" if noticias else ""
+
+    def llamar_claude(system: str) -> str:
+        try:
+            resp = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=600,
+                system=system,
+                messages=[{"role": "user", "content": prompt_base + contexto_mercado}]
+            )
+            return resp.content[0].text if resp.content else ""
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+    sistema_bull = (
+        f"Sos un analista alcista de Wall Street. Tu trabajo es construir el caso MÁS FUERTE posible para comprar {ticker}. "
+        "Buscá los argumentos más sólidos: ventaja competitiva, crecimiento, TAM, management, tendencia secular. "
+        "Sé específico. No menciones riesgos. Directo, sin emojis, máximo 5 bullets concisos."
+    )
+
+    sistema_bear = (
+        f"Sos un short seller. Tu trabajo es construir el caso MÁS FUERTE posible para NO comprar {ticker}. "
+        "Buscá los argumentos más sólidos: riesgos reales, competencia, valuación cara, deuda, ejecución débil. "
+        "Sé específico con datos. No menciones positivos. Directo, sin emojis, máximo 5 bullets concisos."
+    )
+
+    caso_bull = llamar_claude(sistema_bull)
+    caso_bear = llamar_claude(sistema_bear)
+
+    return (
+        f"DEBATE {ticker}: BULL vs BEAR\n"
+        f"{'─' * 40}\n"
+        f"CASO ALCISTA (por qué comprar):\n{caso_bull}\n\n"
+        f"{'─' * 40}\n"
+        f"CASO BAJISTA (por qué no comprar):\n{caso_bear}\n\n"
+        f"{'─' * 40}\n"
+        f"El veredicto final es tuyo. Guardá tu decision con /debate si queres trackearla."
+    )
+
+
 SYSTEM_PROMPT = """Agente financiero de Mateo. Buy & hold, largo plazo.
 
 ESTILO: Directo, sin relleno, sin emojis. Priorizo entender el negocio sobre los números.
@@ -359,6 +451,8 @@ REGLAS:
 1. create_trade: SOLO con SÍ/CONFIRMO explícito. Mostrar ticket antes.
 2. Watchlist/alertas/metas: LLAMAR la herramienta, no prometérselo.
 3. Detectar sesgos (FOMO, anclaje) y avisar.
+4. DECISION LOG: Al terminar cualquier análisis de un ticker, usar decision_log(guardar) con el veredicto (alcista/bajista/neutral) y el razonamiento en 1 línea. Al iniciar un nuevo análisis del mismo ticker, leer primero el historial para comparar si la tesis anterior fue correcta.
+5. PROFUNDIDAD: Si el mensaje dice "rápido" o "quick" → 1 brave_search + yf_info. Si dice "profundo" o "deep" → hasta 3 brave_search + yf_info + yf_financials + sec_filings. Por defecto: 1 brave_search + yf_info.
 
 TICKET antes de create_trade:
 Acción:[COMPRA/VENTA] Ticker:[X] Tipo:[MARKET/LIMIT] Monto:$[X] Riesgo:[X]
@@ -393,7 +487,10 @@ THESIS TRACKER — armar o revisar una tesis:
 1) Por qué esta empresa en una línea, 2) Qué tiene que ser verdad para que funcione, 3) Qué señal concreta me diría que me equivoqué, 4) Catalizadores próximos 6 meses.
 
 MORNING NOTE — morning briefing:
-Usá get_portfolio_summary + brave_search. Qué pasó en el mercado, alguna noticia de mis empresas, dato macro relevante, 1 acción concreta."""
+Usá get_portfolio_summary + brave_search. Qué pasó en el mercado, alguna noticia de mis empresas, dato macro relevante, 1 acción concreta.
+
+BULL VS BEAR — cuando pidan debate o "convenceme":
+Usar bull_bear_analysis. Dos llamadas separadas, argumentos opuestos, veredicto es del usuario. Al terminar, sugerir guardar la decisión en decision_log."""
 
 # ─── Función principal de chat con Tool Use ───────────────────────────────────
 

@@ -17,6 +17,7 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS diario_trading (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, ticker TEXT, accion TEXT, precio REAL, monto REAL, razonamiento TEXT, sesgo_detectado TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS configuracion (clave TEXT PRIMARY KEY, valor TEXT, actualizado TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS bitacora (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, tipo TEXT, descripcion TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS decision_log (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, ticker TEXT, precio_momento REAL, veredicto TEXT, razonamiento TEXT, resultado TEXT)''')
     conn.commit()
     conn.close()
 
@@ -184,6 +185,42 @@ def obtener_diario_trading(limite=10):
     rows = c.fetchall()
     conn.close()
     return rows
+
+# ─── Decision Log ──────────────────────────────────────────────────────────────
+
+def guardar_decision(ticker, precio_momento, veredicto, razonamiento):
+    """Guarda una decisión/análisis de un ticker para trackear si la tesis fue correcta."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO decision_log (fecha, ticker, precio_momento, veredicto, razonamiento, resultado) VALUES (?, ?, ?, ?, ?, ?)",
+        (datetime.now().isoformat(), ticker.upper(), precio_momento, veredicto, razonamiento, "pendiente")
+    )
+    conn.commit()
+    conn.close()
+
+def obtener_decisiones_ticker(ticker, limite=5):
+    """Obtiene el historial de decisiones sobre un ticker específico."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "SELECT fecha, precio_momento, veredicto, razonamiento, resultado FROM decision_log WHERE ticker = ? ORDER BY id DESC LIMIT ?",
+        (ticker.upper(), limite)
+    )
+    rows = c.fetchall()
+    conn.close()
+    return [{"fecha": r[0], "precio": r[1], "veredicto": r[2], "razonamiento": r[3], "resultado": r[4]} for r in rows]
+
+def actualizar_resultado_decision(ticker, resultado):
+    """Actualiza el resultado de la última decisión sobre un ticker."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "UPDATE decision_log SET resultado = ? WHERE ticker = ? AND id = (SELECT MAX(id) FROM decision_log WHERE ticker = ?)",
+        (resultado, ticker.upper(), ticker.upper())
+    )
+    conn.commit()
+    conn.close()
 
 # ─── Bitácora ──────────────────────────────────────────────────────────────────
 
