@@ -187,6 +187,89 @@ def check_earnings_upcoming(tickers: list, days: int = 14) -> dict:
     return {"ok": True, "data": upcoming if upcoming else []}
 
 
+def screener_filtrar(
+    tickers: list,
+    min_revenue_growth: float = None,
+    max_pe: float = None,
+    min_market_cap: float = None,
+    max_market_cap: float = None,
+    min_profit_margin: float = None,
+    max_debt_to_equity: float = None
+) -> dict:
+    """
+    Screener básico: toma una lista de tickers candidatos (encontrados vía brave_search)
+    y los valida/filtra con datos reales de yfinance. Devuelve solo los que cumplen
+    los criterios, rankeados por crecimiento de revenue descendente.
+
+    Criterios (todos opcionales, None = sin filtro):
+    - min_revenue_growth: ej 0.15 = mínimo 15% YoY
+    - max_pe: P/E máximo aceptable
+    - min_market_cap / max_market_cap: en USD
+    - min_profit_margin: ej 0.10 = mínimo 10% margen neto
+    - max_debt_to_equity: deuda/patrimonio máximo
+    """
+    resultados = []
+    descartados = []
+
+    for ticker in tickers:
+        ticker = ticker.strip().upper()
+        if not ticker:
+            continue
+        info = yf_get_info(ticker)
+        if not info["ok"]:
+            descartados.append({"ticker": ticker, "razon": "sin datos en yfinance"})
+            continue
+
+        d = info["data"]
+        revenue_growth = d.get("revenueGrowth")
+        pe = d.get("trailingPE")
+        market_cap = d.get("marketCap")
+        profit_margin = d.get("profitMargins")
+        debt_to_equity = d.get("debtToEquity")
+
+        motivos_descarte = []
+        if min_revenue_growth is not None and (revenue_growth is None or revenue_growth < min_revenue_growth):
+            motivos_descarte.append(f"revenue growth {revenue_growth} < {min_revenue_growth}")
+        if max_pe is not None and (pe is None or pe > max_pe):
+            motivos_descarte.append(f"P/E {pe} > {max_pe}")
+        if min_market_cap is not None and (market_cap is None or market_cap < min_market_cap):
+            motivos_descarte.append(f"market cap {market_cap} < {min_market_cap}")
+        if max_market_cap is not None and (market_cap is None or market_cap > max_market_cap):
+            motivos_descarte.append(f"market cap {market_cap} > {max_market_cap}")
+        if min_profit_margin is not None and (profit_margin is None or profit_margin < min_profit_margin):
+            motivos_descarte.append(f"margen {profit_margin} < {min_profit_margin}")
+        if max_debt_to_equity is not None and (debt_to_equity is None or debt_to_equity > max_debt_to_equity):
+            motivos_descarte.append(f"deuda/equity {debt_to_equity} > {max_debt_to_equity}")
+
+        if motivos_descarte:
+            descartados.append({"ticker": ticker, "razon": "; ".join(motivos_descarte)})
+            continue
+
+        resultados.append({
+            "ticker": ticker,
+            "nombre": d.get("shortName", ticker),
+            "sector": d.get("sector"),
+            "industry": d.get("industry"),
+            "market_cap": market_cap,
+            "pe": pe,
+            "revenue_growth": revenue_growth,
+            "profit_margin": profit_margin,
+            "debt_to_equity": debt_to_equity,
+            "precio_actual": d.get("currentPrice"),
+            "recomendacion_analistas": d.get("recommendationKey")
+        })
+
+    resultados.sort(key=lambda x: x.get("revenue_growth") or -999, reverse=True)
+
+    return {
+        "ok": True,
+        "data": {
+            "cumplen_criterios": resultados,
+            "descartados": descartados
+        }
+    }
+
+
 def yf_get_options(ticker: str) -> dict:
     """Fechas de vencimiento de opciones disponibles."""
     try:

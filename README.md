@@ -35,6 +35,7 @@ Usa la API pública de Wallbit + Claude (Anthropic) como cerebro + fuentes de da
 - Watchlist con alertas de precio automáticas (chequeo cada 30 minutos)
 - Thesis Tracker: armá y revisá tesis de inversión estructuradas
 - Idea Generation: screener por valor, crecimiento o calidad
+- Screener de tesis: describís una tesis en lenguaje natural ("empresas de defensa con contratos nuevos") y el agente busca candidatos con Brave Search + los valida con datos reales de yfinance (revenue growth, márgenes, deuda, P/E)
 - Diario de trading: registrá decisiones y detectá sesgos cognitivos
 - Metas financieras con seguimiento de progreso
 - Presupuesto mensual por categorías

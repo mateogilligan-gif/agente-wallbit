@@ -144,6 +144,23 @@ TOOLS = [
         "name": "bull_bear_analysis",
         "description": "Ejecuta un debate estructurado Bull vs Bear sobre un ticker: dos análisis opuestos con argumentos concretos. Usar cuando el usuario pide debate, análisis profundo, o 'convenceme/no me convenzas' de una acción.",
         "input_schema": {"type": "object", "properties": {"ticker": {"type": "string"}, "contexto": {"type": "string"}}, "required": ["ticker"]}
+    },
+    {
+        "name": "thesis_screener",
+        "description": "Filtra una lista de tickers candidatos con datos REALES de yfinance según criterios cuantitativos. Usar SIEMPRE después de brave_search cuando el usuario pida un screener/ideas basadas en una tesis: primero buscar 8-15 empresas candidatas con brave_search, extraer sus tickers, y después llamar esta herramienta para validarlas con números reales y descartar las que no cumplen.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tickers": {"type": "array", "items": {"type": "string"}, "description": "Tickers candidatos a validar"},
+                "min_revenue_growth": {"type": "number", "description": "Ej 0.15 = mínimo 15% crecimiento YoY"},
+                "max_pe": {"type": "number"},
+                "min_market_cap": {"type": "number", "description": "En USD"},
+                "max_market_cap": {"type": "number", "description": "En USD"},
+                "min_profit_margin": {"type": "number", "description": "Ej 0.10 = mínimo 10% margen neto"},
+                "max_debt_to_equity": {"type": "number"}
+            },
+            "required": ["tickers"]
+        }
     }
 ]
 
@@ -371,6 +388,18 @@ def ejecutar_herramienta(nombre: str, inputs: dict) -> str:
             contexto = inputs.get("contexto", "")
             resultado = {"ok": True, "data": _ejecutar_bull_bear(ticker, contexto)}
 
+        # ── Screener de tesis ──
+        elif nombre == "thesis_screener":
+            resultado = market_data.screener_filtrar(
+                tickers=inputs["tickers"],
+                min_revenue_growth=inputs.get("min_revenue_growth"),
+                max_pe=inputs.get("max_pe"),
+                min_market_cap=inputs.get("min_market_cap"),
+                max_market_cap=inputs.get("max_market_cap"),
+                min_profit_margin=inputs.get("min_profit_margin"),
+                max_debt_to_equity=inputs.get("max_debt_to_equity")
+            )
+
         else:
             return f"Herramienta desconocida: {nombre}"
 
@@ -490,7 +519,13 @@ MORNING NOTE — morning briefing:
 Usá get_portfolio_summary + brave_search. Qué pasó en el mercado, alguna noticia de mis empresas, dato macro relevante, 1 acción concreta.
 
 BULL VS BEAR — cuando pidan debate o "convenceme":
-Usar bull_bear_analysis. Dos llamadas separadas, argumentos opuestos, veredicto es del usuario. Al terminar, sugerir guardar la decisión en decision_log."""
+Usar bull_bear_analysis. Dos llamadas separadas, argumentos opuestos, veredicto es del usuario. Al terminar, sugerir guardar la decisión en decision_log.
+
+SCREENER DE TESIS — cuando el usuario describa una tesis y pida ideas/candidatos (ej: "empresas de defensa con contratos nuevos", "penny stocks de biotech con catalizador cerca"):
+1. brave_search (1-2 búsquedas) para encontrar 8-15 empresas candidatas que mencionen medios o análisis recientes sobre esa tesis.
+2. Extraer los tickers de esos candidatos (si no es obvio el ticker, usar get_asset o yf_info para confirmarlo antes de pasarlo al filtro).
+3. Llamar thesis_screener con esos tickers. Definir criterios numéricos razonables según lo que pidió el usuario (si no especificó, usar defaults: min_revenue_growth 0.15, sin límite de market cap salvo que digan "chica/mediana/grande").
+4. Presentar el TOP 5 de los que cumplieron: ticker, por qué encaja con la tesis (1 línea), la métrica que lo valida, y el riesgo principal. Mencionar cuántos candidatos fueron descartados y por qué (breve)."""
 
 # ─── Función principal de chat con Tool Use ───────────────────────────────────
 
