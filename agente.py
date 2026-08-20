@@ -16,6 +16,8 @@ from database import (
 import wallbit_client
 import brave_client
 import market_data
+import web_reader
+import global_search
 
 # ─── Definición de herramientas para Anthropic Tool Use ───────────────────────
 
@@ -160,6 +162,32 @@ TOOLS = [
                 "max_debt_to_equity": {"type": "number"}
             },
             "required": ["tickers"]
+        }
+    },
+    {
+        "name": "busqueda_global",
+        "description": "Motor de búsqueda de noticias GLOBAL (Google News + GDELT), cubre prensa de cualquier país del mundo, no solo medios en inglés/EEUU como brave_search. Usar cuando se necesite cobertura de prensa local de un país específico (empresa australiana, europea, asiática, latinoamericana) o cuando brave_search no traiga resultados relevantes de ese mercado. Pasar el código de país ISO (AU, DE, JP, AR, BR, etc) e idioma (en, de, ja, es, etc) según de dónde sea la empresa. Devuelve título, URL, fuente y país — después usar leer_pagina_web sobre la URL más relevante para el texto completo.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Términos de búsqueda"},
+                "pais": {"type": "string", "description": "Código ISO 2 letras del país, ej AU, DE, JP, AR, BR"},
+                "idioma": {"type": "string", "description": "Código ISO 2 letras del idioma, ej en, de, ja, es"},
+                "count": {"type": "integer"}
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "leer_pagina_web",
+        "description": "Entra a una URL específica y devuelve el texto completo de la página (no solo título/resumen). Usar cuando: (1) brave_search devolvió un snippet insuficiente y hace falta más detalle de esa noticia, (2) el usuario pide explícitamente meterse en la web oficial de una empresa (sección 'News'/'Newsroom'/'Investor Relations'), o (3) hay que leer un diario local específico (La Nación, Cronista, Ámbito, Infobae, etc). Máximo 2-3 llamadas por consulta para no gastar tokens de más.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "URL completa a leer"},
+                "max_chars": {"type": "integer", "description": "Límite de caracteres a extraer, default 4000"}
+            },
+            "required": ["url"]
         }
     }
 ]
@@ -388,6 +416,22 @@ def ejecutar_herramienta(nombre: str, inputs: dict) -> str:
             contexto = inputs.get("contexto", "")
             resultado = {"ok": True, "data": _ejecutar_bull_bear(ticker, contexto)}
 
+        # ── Búsqueda global de noticias ──
+        elif nombre == "busqueda_global":
+            resultado = global_search.busqueda_global(
+                query=inputs["query"],
+                pais=inputs.get("pais"),
+                idioma=inputs.get("idioma"),
+                count=inputs.get("count", 10)
+            )
+
+        # ── Lectura de páginas web completas ──
+        elif nombre == "leer_pagina_web":
+            resultado = web_reader.fetch_article_text(
+                inputs["url"],
+                inputs.get("max_chars", 4000)
+            )
+
         # ── Screener de tesis ──
         elif nombre == "thesis_screener":
             resultado = market_data.screener_filtrar(
@@ -492,7 +536,7 @@ Usá brave_search + yf_info. El foco es entender el negocio, no recitar balances
 
 1. QUÉ HACE: Explicá el producto o servicio en 2-3 líneas. Qué problema resuelve, cómo gana plata, quiénes son sus clientes.
 
-2. PRODUCTOS Y PROYECTOS: Qué está construyendo ahora. Lanzamientos recientes, roadmap, contratos importantes, partnerships. Buscá con brave_search noticias de los últimos 6 meses.
+2. PRODUCTOS Y PROYECTOS: Qué está construyendo ahora. Lanzamientos recientes, roadmap, contratos importantes, partnerships. Buscá con brave_search noticias de los últimos 6 meses. Si el snippet no alcanza para entender el detalle, usá leer_pagina_web sobre la URL más relevante (máximo 2) para sacar el texto completo antes de escribir la sección.
 
 3. COMPETENCIA Y POSICIÓN: Quiénes son sus 2-3 competidores directos. Qué ventaja tiene esta empresa sobre ellos. Está ganando o perdiendo terreno.
 
@@ -525,7 +569,14 @@ SCREENER DE TESIS — cuando el usuario describa una tesis y pida ideas/candidat
 1. brave_search (1-2 búsquedas) para encontrar 8-15 empresas candidatas que mencionen medios o análisis recientes sobre esa tesis.
 2. Extraer los tickers de esos candidatos (si no es obvio el ticker, usar get_asset o yf_info para confirmarlo antes de pasarlo al filtro).
 3. Llamar thesis_screener con esos tickers. Definir criterios numéricos razonables según lo que pidió el usuario (si no especificó, usar defaults: min_revenue_growth 0.15, sin límite de market cap salvo que digan "chica/mediana/grande").
-4. Presentar el TOP 5 de los que cumplieron: ticker, por qué encaja con la tesis (1 línea), la métrica que lo valida, y el riesgo principal. Mencionar cuántos candidatos fueron descartados y por qué (breve)."""
+4. Presentar el TOP 5 de los que cumplieron: ticker, por qué encaja con la tesis (1 línea), la métrica que lo valida, y el riesgo principal. Mencionar cuántos candidatos fueron descartados y por qué (breve).
+
+RESEARCH PROFUNDO — cuando el usuario pida "metete en la web de [empresa]", "buscá en diarios locales/foros del rubro", o el análisis normal se quede corto:
+1. Identificar primero el país y el rubro de la empresa (dónde cotiza, dónde tiene sede, industria). Esto define el código de país/idioma a usar — NO asumir que son medios argentinos salvo que la empresa opere en Argentina.
+2. Web oficial de la empresa: buscar con brave_search "[empresa] official website news OR newsroom OR investor relations" y usar leer_pagina_web sobre la URL que encuentre.
+3. Prensa local/global: usar busqueda_global con el código ISO de país e idioma correspondiente (ej empresa australiana → pais="AU" idioma="en", empresa alemana → pais="DE" idioma="de", empresa brasilera → pais="BR" idioma="pt"). Esto trae medios reales de ese mercado (Google News + GDELT), no solo lo que indexa brave_search en inglés.
+4. Una vez identificada la URL relevante (medio local, foro especializado, o sitio oficial), usar leer_pagina_web para sacar el texto completo — no te quedes solo con el título.
+5. Máximo 2-3 leer_pagina_web por consulta para no gastar tokens de más. Priorizar la fuente más reciente y relevante, en el idioma que sea (traducir el hallazgo al responder)."""
 
 # ─── Función principal de chat con Tool Use ───────────────────────────────────
 
