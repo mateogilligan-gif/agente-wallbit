@@ -19,6 +19,7 @@ Usa la API pública de Wallbit + Claude (Anthropic) como cerebro + fuentes de da
 - Insiders: quién está comprando o vendiendo dentro de la empresa
 - Historial de dividendos
 - Filings oficiales de la SEC: 10-K, 10-Q, 8-K
+- Búsqueda de texto completo en SEC EDGAR: encuentra frases o riesgos específicos DENTRO del contenido de los filings (ej "supply chain", "customer concentration"), no solo lista qué documentos existen
 
 **Earnings**
 - Earnings Calendar: próximas fechas de reporte de tu portfolio con EPS estimado del consenso

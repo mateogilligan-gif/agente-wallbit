@@ -129,6 +129,20 @@ TOOLS = [
         "input_schema": {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]}
     },
     {
+        "name": "sec_busqueda_texto",
+        "description": "Búsqueda de TEXTO COMPLETO dentro del contenido real de los filings de SEC EDGAR (no solo lista documentos, busca DENTRO de ellos). Usar para encontrar frases o riesgos específicos, ej: buscar 'supply chain' o 'customer concentration' dentro de los 10-K de una empresa, o ver qué empresas mencionan un riesgo particular. Pasar ticker para limitar la búsqueda a una sola empresa, o dejarlo vacío para buscar en toda la base de EDGAR.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Frase o palabra clave a buscar dentro de los documentos"},
+                "ticker": {"type": "string", "description": "Opcional, restringe la búsqueda a esta empresa"},
+                "form_type": {"type": "string", "description": "Opcional, ej 10-K, 10-Q, 8-K"},
+                "limit": {"type": "integer"}
+            },
+            "required": ["query"]
+        }
+    },
+    {
         "name": "yf_earnings_calendar",
         "description": "Próxima fecha de earnings de un ticker y estimados de EPS/Revenue del consenso.",
         "input_schema": {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]}
@@ -389,6 +403,13 @@ def ejecutar_herramienta(nombre: str, inputs: dict) -> str:
             resultado = market_data.sec_get_filings(inputs["company"], inputs.get("form_type", "10-K"), inputs.get("limit", 3))
         elif nombre == "sec_facts":
             resultado = market_data.sec_get_company_facts(inputs["ticker"])
+        elif nombre == "sec_busqueda_texto":
+            resultado = market_data.sec_search_fulltext(
+                query=inputs["query"],
+                ticker=inputs.get("ticker"),
+                form_type=inputs.get("form_type"),
+                limit=inputs.get("limit", 10)
+            )
 
         elif nombre == "yf_earnings_calendar":
             resultado = market_data.yf_get_earnings_calendar(inputs["ticker"])
@@ -559,6 +580,9 @@ Usá brave_search + yf_info. El foco es entender el negocio, no recitar balances
 
 SENTIMIENTO SOCIAL — solo si el usuario lo pide explícitamente ("qué dice la gente", "hype", "sentimiento del mercado"):
 Usar sentimiento_social (StockTwits). Aclarar siempre que es sentimiento de retail/comunidad, no un indicador fundamental — sirve para detectar euforia o pánico excesivo, no para tomar la decisión de inversión en sí.
+
+BÚSQUEDA DE RIESGOS EN FILINGS — cuando pidan "qué dice el 10-K sobre X riesgo", "buscá menciones de [tema] en los reportes", o quieran validar un riesgo puntual (cadena de suministro, concentración de clientes, litigios):
+Usar sec_busqueda_texto con el ticker y la frase exacta a buscar (ej: "supply chain disruption", "customer concentration"). Esto busca DENTRO del contenido real de los documentos, no solo lista cuáles existen — mucho más preciso que sec_filings para encontrar un riesgo específico.
 
 EARNINGS ANALYSIS — análisis post-earnings:
 Usá brave_search para buscar el earnings call. Estructura: beat/miss vs consenso, qué dijo el CEO sobre productos y crecimiento futuro, si la tesis de largo plazo sigue intacta.

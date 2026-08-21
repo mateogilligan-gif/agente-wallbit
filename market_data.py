@@ -2,6 +2,7 @@
 market_data.py — Fuentes de datos gratuitas: yfinance, FRED, SEC EDGAR
 """
 import json
+import re
 import requests
 from datetime import datetime, timedelta
 
@@ -342,54 +343,61 @@ def fred_get_series(serie: str, observaciones: int = 12) -> dict:
 
 # ─── SEC EDGAR ────────────────────────────────────────────────────────────────
 
-EDGAR_BASE = "https://efts.sec.gov/LATEST/search-index"
+EDGAR_FULLTEXT_URL = "https://efts.sec.gov/LATEST/search-index"
 EDGAR_HEADERS = {"User-Agent": "agente-wallbit mateo@wallbit.io"}
+
+_cik_cache = None
+
+
+def _get_cik(ticker_o_nombre: str) -> str:
+    """
+    Resuelve un ticker o nombre de empresa a su CIK (identificador de SEC),
+    usando el archivo público company_tickers.json (se cachea en memoria
+    después de la primera consulta para no repetir la descarga).
+    """
+    global _cik_cache
+    try:
+        if _cik_cache is None:
+            r = requests.get("https://www.sec.gov/files/company_tickers.json", headers=EDGAR_HEADERS, timeout=15)
+            r.raise_for_status()
+            _cik_cache = r.json()
+
+        clave = ticker_o_nombre.strip().upper()
+
+        # 1) match exacto de ticker
+        for item in _cik_cache.values():
+            if item.get("ticker", "").upper() == clave:
+                return str(item["cik_str"]).zfill(10)
+
+        # 2) match parcial de nombre de empresa
+        for item in _cik_cache.values():
+            if ticker_o_nombre.lower() in item.get("title", "").lower():
+                return str(item["cik_str"]).zfill(10)
+
+        return None
+    except Exception:
+        return None
+
 
 def sec_get_filings(company: str, form_type: str = "10-K", limit: int = 3) -> dict:
     """
-    Busca filings de SEC EDGAR.
+    Lista los filings más recientes de una empresa en SEC EDGAR (por nombre o ticker).
     form_type: 10-K (anual), 10-Q (trimestral), 8-K (eventos), DEF 14A (proxy)
     """
     try:
-        url = "https://efts.sec.gov/LATEST/search-index"
-        params = {
-            "q": f'"{company}"',
-            "dateRange": "custom",
-            "startdt": (datetime.now() - timedelta(days=730)).strftime("%Y-%m-%d"),
-            "enddt": datetime.now().strftime("%Y-%m-%d"),
-            "forms": form_type
-        }
-        r = requests.get("https://efts.sec.gov/LATEST/search-index", params=params, headers=EDGAR_HEADERS, timeout=10)
-
-        # Usar la API de búsqueda correcta
-        search_url = "https://efts.sec.gov/LATEST/search-index"
-        api_url = f"https://efts.sec.gov/LATEST/search-index?q=%22{company.replace(' ', '+')}%22&forms={form_type}&dateRange=custom&startdt={(datetime.now() - timedelta(days=730)).strftime('%Y-%m-%d')}&enddt={datetime.now().strftime('%Y-%m-%d')}"
-
-        r2 = requests.get(
-            "https://efts.sec.gov/LATEST/search-index",
-            params={"q": f'"{company}"', "forms": form_type},
+        r = requests.get(
+            "https://www.sec.gov/cgi-bin/browse-edgar",
+            params={
+                "company": company, "CIK": "", "type": form_type, "dateb": "",
+                "owner": "include", "count": limit, "search_text": "",
+                "action": "getcompany", "output": "atom"
+            },
             headers=EDGAR_HEADERS,
             timeout=10
         )
 
-        # API correcta de EDGAR full-text search
-        r3 = requests.get(
-            "https://efts.sec.gov/LATEST/search-index",
-            params={"q": company, "forms": form_type, "_source": "file_date,period_of_report,entity_name,file_num,form_type,file_date"},
-            headers=EDGAR_HEADERS,
-            timeout=10
-        )
-
-        # Usar EDGAR company search API
-        search_r = requests.get(
-            f"https://www.sec.gov/cgi-bin/browse-edgar?company={requests.utils.quote(company)}&CIK=&type={form_type}&dateb=&owner=include&count={limit}&search_text=&action=getcompany&output=atom",
-            headers=EDGAR_HEADERS,
-            timeout=10
-        )
-
-        if search_r.status_code == 200 and "<entry>" in search_r.text:
-            import re
-            entries = re.findall(r'<entry>(.*?)</entry>', search_r.text, re.DOTALL)[:limit]
+        if r.status_code == 200 and "<entry>" in r.text:
+            entries = re.findall(r'<entry>(.*?)</entry>', r.text, re.DOTALL)[:limit]
             results = []
             for entry in entries:
                 title = re.search(r'<title>(.*?)</title>', entry)
@@ -405,6 +413,73 @@ def sec_get_filings(company: str, form_type: str = "10-K", limit: int = 3) -> di
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+
+def sec_search_fulltext(query: str, ticker: str = None, form_type: str = None, limit: int = 10) -> dict:
+    """
+    Búsqueda de TEXTO COMPLETO real dentro del contenido de los filings de SEC EDGAR
+    (usa el EDGAR Full-Text Search System oficial). Permite buscar una frase o
+    palabra clave específica DENTRO de los documentos, no solo listarlos.
+
+    Ejemplos de uso: buscar "supply chain" dentro de los 10-K de una empresa,
+    o "customer concentration" en toda la base para ver qué empresas lo mencionan.
+
+    query: frase o palabra clave a buscar dentro de los documentos
+    ticker: opcional, restringe la búsqueda a una sola empresa
+    form_type: opcional, ej "10-K", "10-Q", "8-K"
+    """
+    try:
+        params = {"q": f'"{query}"' if " " in query else query}
+        if form_type:
+            params["forms"] = form_type
+
+        empresa_filtrada = None
+        if ticker:
+            cik = _get_cik(ticker)
+            if cik:
+                params["ciks"] = cik
+                empresa_filtrada = ticker.upper()
+
+        r = requests.get(EDGAR_FULLTEXT_URL, params=params, headers=EDGAR_HEADERS, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+
+        hits = data.get("hits", {}).get("hits", [])[:limit]
+        total = data.get("hits", {}).get("total", {}).get("value", 0)
+
+        resultados = []
+        for h in hits:
+            src = h.get("_source", {})
+            id_field = h.get("_id", "")
+            accession, _, filename = id_field.partition(":")
+            accession_sin_guiones = accession.replace("-", "")
+
+            display_names = src.get("display_names", [])
+            cik_match = re.search(r"\((\d+)\)", display_names[0]) if display_names else None
+            cik_num = cik_match.group(1) if cik_match else None
+
+            url_doc = None
+            if cik_num and accession_sin_guiones and filename:
+                url_doc = f"https://www.sec.gov/Archives/edgar/data/{cik_num}/{accession_sin_guiones}/{filename}"
+
+            resultados.append({
+                "empresa": display_names[0] if display_names else "",
+                "form_type": src.get("form_type") or src.get("file_type"),
+                "fecha": src.get("file_date"),
+                "url": url_doc
+            })
+
+        return {
+            "ok": True,
+            "data": {
+                "query": query,
+                "empresa_filtrada": empresa_filtrada,
+                "total_encontrados": total,
+                "resultados": resultados
+            }
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
 def sec_get_company_facts(ticker: str) -> dict:
     """Obtiene datos financieros clave del CIK de la empresa en SEC."""
     try:
@@ -413,7 +488,6 @@ def sec_get_company_facts(ticker: str) -> dict:
             f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&company=&CIK={ticker}&type=&dateb=&owner=include&count=1&search_text=&output=atom",
             headers=EDGAR_HEADERS, timeout=10
         )
-        import re
         cik_match = re.search(r'/cgi-bin/browse-edgar\?action=getcompany&CIK=(\d+)', cik_r.text)
         if not cik_match:
             return {"ok": False, "error": f"No se encontró CIK para {ticker}"}
