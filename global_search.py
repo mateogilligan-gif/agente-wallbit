@@ -15,11 +15,24 @@ el texto completo del artículo.
 """
 import requests
 import urllib.parse
+from datetime import datetime
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 }
+
+_cache = {}
+
+
+def _is_cached(key, max_minutos=30):
+    if key not in _cache:
+        return False
+    return (datetime.now() - _cache[key]["timestamp"]).seconds / 60 < max_minutos
+
+
+def clear_cache():
+    _cache.clear()
 
 
 def google_news_search(query: str, pais: str = None, idioma: str = None, count: int = 10) -> dict:
@@ -95,6 +108,10 @@ def busqueda_global(query: str, pais: str = None, idioma: str = None, count: int
     Motor unificado: prueba Google News RSS primero (mejor targeting por país/idioma),
     y completa con GDELT si hay pocos resultados. Dedupea por URL.
     """
+    key = f"{query.lower()}:{pais}:{idioma}:{count}"
+    if _is_cached(key):
+        return _cache[key]["data"]
+
     resultados = []
     vistos = set()
 
@@ -118,4 +135,6 @@ def busqueda_global(query: str, pais: str = None, idioma: str = None, count: int
     if not resultados:
         return {"ok": False, "error": "Sin resultados en Google News ni GDELT para esta búsqueda"}
 
-    return {"ok": True, "data": resultados[:count]}
+    resultado_final = {"ok": True, "data": resultados[:count]}
+    _cache[key] = {"data": resultado_final, "timestamp": datetime.now()}
+    return resultado_final
