@@ -186,7 +186,7 @@ TOOLS = [
     },
     {
         "name": "leer_pagina_web",
-        "description": "Entra a una URL específica y devuelve el texto completo de la página (no solo título/resumen). Usar cuando: (1) brave_search devolvió un snippet insuficiente y hace falta más detalle de esa noticia, (2) el usuario pide explícitamente meterse en la web oficial de una empresa (sección 'News'/'Newsroom'/'Investor Relations'), o (3) hay que leer un diario local específico (La Nación, Cronista, Ámbito, Infobae, etc). Máximo 2-3 llamadas por consulta para no gastar tokens de más.",
+        "description": "Entra a una URL específica y devuelve el texto completo de la página (no solo título/resumen). Usar cuando: (1) brave_search o busqueda_global devolvieron un snippet insuficiente y hace falta más detalle, (2) el usuario pide explícitamente meterse en la web oficial de una empresa (sección 'News'/'Newsroom'/'Investor Relations'), o (3) hay que leer un diario o foro específico de cualquier país. Internamente prueba lectura directa primero y si el sitio renderiza con JavaScript (contenido vacío), cae automáticamente a un lector con motor de render — no hace falta pedirlo. Máximo 2-3 llamadas por consulta para no gastar tokens de más.",
         "input_schema": {
             "type": "object",
             "properties": {
