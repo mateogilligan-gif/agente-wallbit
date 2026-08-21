@@ -18,6 +18,7 @@ import brave_client
 import market_data
 import web_reader
 import global_search
+import social_sentiment
 
 # ─── Definición de herramientas para Anthropic Tool Use ───────────────────────
 
@@ -177,6 +178,11 @@ TOOLS = [
             },
             "required": ["query"]
         }
+    },
+    {
+        "name": "sentimiento_social",
+        "description": "Sentimiento de la comunidad de StockTwits (red social 100% financiera) sobre un ticker: % de mensajes Bullish vs Bearish, etiquetados por los propios usuarios. Mucho menos ruido que X/Twitter porque es una comunidad exclusiva de trading. Usar cuando el usuario pregunte 'qué dice la gente', 'sentimiento del mercado minorista', 'hype', o quiera pulso social de una acción.",
+        "input_schema": {"type": "object", "properties": {"ticker": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["ticker"]}
     },
     {
         "name": "leer_pagina_web",
@@ -416,6 +422,13 @@ def ejecutar_herramienta(nombre: str, inputs: dict) -> str:
             contexto = inputs.get("contexto", "")
             resultado = {"ok": True, "data": _ejecutar_bull_bear(ticker, contexto)}
 
+        # ── Sentimiento social (StockTwits) ──
+        elif nombre == "sentimiento_social":
+            resultado = social_sentiment.stocktwits_sentiment(
+                inputs["ticker"],
+                inputs.get("limit", 30)
+            )
+
         # ── Búsqueda global de noticias ──
         elif nombre == "busqueda_global":
             resultado = global_search.busqueda_global(
@@ -543,6 +556,9 @@ Usá brave_search + yf_info. El foco es entender el negocio, no recitar balances
 4. POTENCIAL A LARGO PLAZO: Por qué esta empresa puede importar en 5 años. Qué tendencia secular la favorece. Cuál es el riesgo que podría destruir esa tesis.
 
 5. NÚMEROS (resumido): Solo 4 métricas — revenue del último año, crecimiento YoY, si es rentable o quema caja, y deuda. Nada más. Si el negocio no convence, los números no importan.
+
+SENTIMIENTO SOCIAL — solo si el usuario lo pide explícitamente ("qué dice la gente", "hype", "sentimiento del mercado"):
+Usar sentimiento_social (StockTwits). Aclarar siempre que es sentimiento de retail/comunidad, no un indicador fundamental — sirve para detectar euforia o pánico excesivo, no para tomar la decisión de inversión en sí.
 
 EARNINGS ANALYSIS — análisis post-earnings:
 Usá brave_search para buscar el earnings call. Estructura: beat/miss vs consenso, qué dijo el CEO sobre productos y crecimiento futuro, si la tesis de largo plazo sigue intacta.

@@ -38,6 +38,7 @@ Usa la API pública de Wallbit + Claude (Anthropic) como cerebro + fuentes de da
 - Screener de tesis: describís una tesis en lenguaje natural ("empresas de defensa con contratos nuevos") y el agente busca candidatos con Brave Search + los valida con datos reales de yfinance (revenue growth, márgenes, deuda, P/E)
 - Lectura de páginas completas: cuando un snippet de noticia no alcanza, el agente entra a la URL real (web oficial de la empresa, prensa o foros especializados del país/rubro donde opera esa empresa — no importa si es Argentina, EEUU, Australia o Europa) y extrae el texto completo del artículo
 - Búsqueda global de noticias: motor propio (Google News RSS + GDELT) que busca en prensa de cualquier país del mundo filtrando por código ISO de país e idioma, no limitado a medios en inglés como el buscador general
+- Sentimiento social: consulta StockTwits (comunidad 100% financiera) para ver el % de mensajes Bullish/Bearish sobre un ticker. Evaluamos usar X/Twitter y lo descartamos — desde 2026 cobra por post leído y tiene mucho más ruido (bots, pump groups) sin ninguna etiqueta de sentimiento
 - Diario de trading: registrá decisiones y detectá sesgos cognitivos
 - Metas financieras con seguimiento de progreso
 - Presupuesto mensual por categorías
@@ -209,6 +210,7 @@ agente-wallbit/
 ├── brave_client.py    # Brave Search con caché 30min
 ├── web_reader.py      # Lector de páginas web completas (empresas, diarios locales)
 ├── global_search.py   # Motor de búsqueda global de noticias (Google News RSS + GDELT)
+├── social_sentiment.py # Sentimiento social vía StockTwits (Bullish/Bearish)
 ├── telegram_bot.py    # Bot de Telegram + jobs automáticos
 ├── instalar.sh        # Script de instalación
 └── config.env.example # Template de configuración
