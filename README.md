@@ -34,7 +34,7 @@ Usa la API pública de Wallbit + Claude (Anthropic) como cerebro + fuentes de da
 
 **Herramientas de inversión**
 - Watchlist con alertas de precio automáticas (chequeo cada 30 minutos)
-- Alertas de porcentaje de movimiento: avisa si una posición sube/baja X% en el día (vs cierre anterior) o desde tu precio de compra. El precio siempre sale de yfinance (fuente externa), no de Wallbit
+- Alertas de porcentaje de movimiento: avisa si una posición sube/baja X% en el día (vs cierre anterior) o desde tu precio de compra. El precio nunca sale de Wallbit — usa yfinance con 3 niveles de respaldo (fast_info → info → historial) y Stooq como fuente 100% independiente si todo lo demás falla
 - Thesis Tracker: armá y revisá tesis de inversión estructuradas
 - Idea Generation: screener por valor, crecimiento o calidad
 - Screener de tesis: describís una tesis en lenguaje natural ("empresas de defensa con contratos nuevos") y el agente busca candidatos con Brave Search + los valida con datos reales de yfinance (revenue growth, márgenes, deuda, P/E)

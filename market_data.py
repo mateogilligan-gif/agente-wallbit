@@ -29,33 +29,99 @@ def yf_get_info(ticker: str) -> dict:
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+def _get_price_stooq(ticker: str):
+    """
+    Respaldo de último recurso: Stooq, una fuente 100% independiente de Yahoo
+    (no usa yfinance/scraping de Yahoo por debajo). Sin API key, cobertura
+    sólida para tickers de EEUU. Devuelve (precio_actual, cierre_anterior)
+    o None si no lo consigue.
+    """
+    try:
+        url = f"https://stooq.com/q/d/l/?s={ticker.lower()}.us&i=d"
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        lineas = [l for l in r.text.strip().split("\n") if l]
+        if len(lineas) < 3:
+            return None
+        ultima = lineas[-1].split(",")
+        penultima = lineas[-2].split(",")
+        precio_actual = float(ultima[4])   # columna Close
+        cierre_anterior = float(penultima[4])
+        return precio_actual, cierre_anterior
+    except Exception:
+        return None
+
+
 def yf_get_price_change(ticker: str) -> dict:
     """
-    Precio actual y % de cambio vs el cierre anterior, 100% desde yfinance
-    (fuente externa — no depende de la API de Wallbit).
+    Precio actual y % de cambio vs el cierre anterior, con varias fuentes en
+    cascada (el campo 'currentPrice' de yfinance es conocido por fallar o
+    venir vacío para ciertos tickers):
+    1) fast_info de yfinance — más liviano y confiable que .info
+    2) .info como respaldo (currentPrice/regularMarketPrice)
+    3) historial de precios (t.history) como respaldo
+    4) Stooq — fuente 100% independiente de Yahoo, último recurso
     """
+    precio_actual = None
+    cierre_anterior = None
+    fuente = None
+
     try:
         import yfinance as yf
         t = yf.Ticker(ticker)
-        info = t.info
-        precio_actual = info.get("currentPrice") or info.get("regularMarketPrice")
-        cierre_anterior = info.get("regularMarketPreviousClose") or info.get("previousClose")
 
-        if precio_actual is None or cierre_anterior is None or cierre_anterior == 0:
-            return {"ok": False, "error": f"Sin datos de precio para {ticker}"}
+        try:
+            fi = t.fast_info
+            precio_actual = fi.get("lastPrice") or fi.get("last_price")
+            cierre_anterior = fi.get("previousClose") or fi.get("previous_close")
+            if precio_actual and cierre_anterior:
+                fuente = "yfinance_fast_info"
+        except Exception:
+            pass
 
-        cambio_pct = round((precio_actual / cierre_anterior - 1) * 100, 2)
-        return {
-            "ok": True,
-            "data": {
-                "ticker": ticker,
-                "precio_actual": precio_actual,
-                "cierre_anterior": cierre_anterior,
-                "cambio_pct_dia": cambio_pct
-            }
+        if not (precio_actual and cierre_anterior):
+            try:
+                info = t.info
+                precio_actual = precio_actual or info.get("currentPrice") or info.get("regularMarketPrice")
+                cierre_anterior = cierre_anterior or info.get("regularMarketPreviousClose") or info.get("previousClose")
+                if precio_actual and cierre_anterior:
+                    fuente = "yfinance_info"
+            except Exception:
+                pass
+
+        if not (precio_actual and cierre_anterior):
+            try:
+                hist = t.history(period="5d")
+                if not hist.empty and len(hist) >= 2:
+                    precio_actual = precio_actual or float(hist["Close"].iloc[-1])
+                    cierre_anterior = cierre_anterior or float(hist["Close"].iloc[-2])
+                    if precio_actual and cierre_anterior:
+                        fuente = "yfinance_history"
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    if not (precio_actual and cierre_anterior):
+        respaldo = _get_price_stooq(ticker)
+        if respaldo:
+            precio_actual, cierre_anterior = respaldo
+            fuente = "stooq"
+
+    if precio_actual is None or cierre_anterior is None or cierre_anterior == 0:
+        return {"ok": False, "error": f"Sin datos de precio para {ticker} en ninguna fuente disponible"}
+
+    cambio_pct = round((precio_actual / cierre_anterior - 1) * 100, 2)
+    return {
+        "ok": True,
+        "data": {
+            "ticker": ticker,
+            "precio_actual": round(float(precio_actual), 2),
+            "cierre_anterior": round(float(cierre_anterior), 2),
+            "cambio_pct_dia": cambio_pct,
+            "fuente": fuente
         }
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    }
 
 
 def yf_get_history(ticker: str, period: str = "1y") -> dict:

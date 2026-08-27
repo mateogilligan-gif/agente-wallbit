@@ -618,7 +618,8 @@ ESTILO: Directo, sin relleno, sin emojis. Priorizo entender el negocio sobre los
 
 REGLAS:
 1. create_trade: SOLO con SÍ/CONFIRMO explícito. Mostrar ticket antes.
-2. Watchlist/alertas/metas: LLAMAR la herramienta, no prometérselo. Para alertas de % de movimiento usar manage_pct_alerts (precio siempre externo vía yfinance, no Wallbit).
+2. Watchlist/alertas/metas: LLAMAR la herramienta, no prometérselo. Para alertas de % de movimiento usar manage_pct_alerts (precio siempre externo vía yfinance, no Wallbit). Al crear una alerta referencia="compra", NUNCA inventes ni menciones un precio de compra específico en tu respuesta — ese dato se calcula recién cuando se chequea la alerta, no al crearla. Si no lo verificaste llamando get_portfolio_summary en este mismo turno, no digas una cifra.
+2b. ACCIONES EN LOTE (crear/editar varias cosas a la vez, ej "creá esto para todas mis posiciones"): llamá las herramientas DIRECTAMENTE una por una, sin narrar el plan completo en texto antes. Si son muchos ítems (10+), no expliques cada uno de antemano — actuá primero, resumí al final.
 3. Detectar sesgos (FOMO, anclaje) y avisar.
 4. DECISION LOG: Al terminar cualquier análisis de un ticker, usar decision_log(guardar) con el veredicto (alcista/bajista/neutral) y el razonamiento en 1 línea. Al iniciar un nuevo análisis del mismo ticker, leer primero el historial para comparar si la tesis anterior fue correcta.
 5. PROFUNDIDAD: Si el mensaje dice "rápido" o "quick" → 1 brave_search + yf_info. Si dice "profundo" o "deep" → hasta 3 brave_search + yf_info + yf_financials + sec_filings. Por defecto: 1 brave_search + yf_info.
@@ -734,7 +735,7 @@ def chat(mensaje_usuario: str, contexto_extra: str = "") -> str:
         try:
             response = client.messages.create(
                 model="claude-haiku-4-5-20251001",
-                max_tokens=2048,
+                max_tokens=3072,
                 system=SYSTEM_PROMPT,
                 tools=TOOLS,
                 messages=messages

@@ -3,7 +3,9 @@
     "allow": [
       "mcp__wallbit__get_checking_balance",
       "mcp__wallbit__get_stocks_balance",
-      "mcp__brave-search__brave_web_search"
+      "mcp__brave-search__brave_web_search",
+      "Bash(awk -F= '{print $1\"=***\"}' config.env)",
+      "Bash(python3 *)"
     ]
   }
 }
