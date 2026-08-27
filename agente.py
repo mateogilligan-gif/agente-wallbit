@@ -71,7 +71,7 @@ TOOLS = [
     },
     {
         "name": "manage_pct_alerts",
-        "description": "Alertas de PORCENTAJE de movimiento sobre un ticker (crear/eliminar/listar). El precio siempre se obtiene de yfinance (fuente externa), no de Wallbit. Dos referencias posibles: 'dia' (% vs cierre de ayer, para detectar movimientos bruscos intradía) o 'compra' (% vs tu precio promedio de compra en Wallbit, para trackear ganancia/pérdida no realizada). Ejemplos: 'avisame si AAPL se mueve más de 5% hoy' (referencia=dia), 'avisame si alguna posición ganó más de 20% desde que la compré' (referencia=compra).",
+        "description": "Alertas de PORCENTAJE de movimiento sobre un ticker (crear/eliminar/listar). El precio actual siempre se obtiene de yfinance (fuente externa), no de Wallbit. Dos referencias: 'dia' (% vs cierre de ayer) o 'compra' (% vs precio de compra, para P&L). IMPORTANTE: Wallbit hoy NO expone el costo promedio de compra en ningún campo — para referencia='compra' hay que pedirle al usuario su precio de compra si no lo dijo, y pasarlo en avg_cost_manual. Sin ese dato la alerta se crea pero nunca podrá dispararse.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -80,6 +80,7 @@ TOOLS = [
                 "umbral_pct": {"type": "number", "description": "Ej 5 = 5%"},
                 "direccion": {"type": "string", "enum": ["sube", "baja", "ambas"], "description": "Default: ambas"},
                 "referencia": {"type": "string", "enum": ["dia", "compra"], "description": "Default: dia"},
+                "avg_cost_manual": {"type": "number", "description": "Precio de compra dado por el usuario. Requerido en la práctica para referencia=compra porque Wallbit no lo expone hoy."},
                 "alerta_id": {"type": "integer"}
             },
             "required": ["accion"]
@@ -331,11 +332,15 @@ def ejecutar_herramienta(nombre: str, inputs: dict) -> str:
                 umbral_pct = inputs.get("umbral_pct")
                 direccion = inputs.get("direccion", "ambas")
                 referencia = inputs.get("referencia", "dia")
+                avg_cost_manual = inputs.get("avg_cost_manual")
                 if not ticker or umbral_pct is None:
                     return "Error: se necesita ticker y umbral_pct para crear la alerta"
-                crear_alerta_pct(ticker, umbral_pct, direccion, referencia)
+                crear_alerta_pct(ticker, umbral_pct, direccion, referencia, avg_cost_manual)
                 ref_str = "hoy vs cierre anterior" if referencia == "dia" else "desde tu precio de compra"
-                resultado = {"ok": True, "data": f"✅ Alerta creada: avisar si {ticker} se mueve {direccion} {umbral_pct}% ({ref_str})"}
+                aviso = ""
+                if referencia == "compra" and avg_cost_manual is None:
+                    aviso = " ⚠️ No me diste tu precio de compra y Wallbit no lo expone — esta alerta no va a poder dispararse hasta que me lo pases."
+                resultado = {"ok": True, "data": f"✅ Alerta creada: avisar si {ticker} se mueve {direccion} {umbral_pct}% ({ref_str}).{aviso}"}
             elif accion == "eliminar":
                 alerta_id = inputs.get("alerta_id")
                 if alerta_id is None:
@@ -346,7 +351,11 @@ def ejecutar_herramienta(nombre: str, inputs: dict) -> str:
                 alertas_pct = obtener_alertas_pct_activas()
                 if alertas_pct:
                     resultado = {"ok": True, "data": [
-                        {"id": a[0], "ticker": a[1], "umbral_pct": a[2], "direccion": a[3], "referencia": a[4]}
+                        {
+                            "id": a[0], "ticker": a[1], "umbral_pct": a[2], "direccion": a[3],
+                            "referencia": a[4], "avg_cost_manual": a[5],
+                            "funcional": a[4] == "dia" or a[5] is not None
+                        }
                         for a in alertas_pct
                     ]}
                 else:
@@ -618,7 +627,7 @@ ESTILO: Directo, sin relleno, sin emojis. Priorizo entender el negocio sobre los
 
 REGLAS:
 1. create_trade: SOLO con SÍ/CONFIRMO explícito. Mostrar ticket antes.
-2. Watchlist/alertas/metas: LLAMAR la herramienta, no prometérselo. Para alertas de % de movimiento usar manage_pct_alerts (precio siempre externo vía yfinance, no Wallbit). Al crear una alerta referencia="compra", NUNCA inventes ni menciones un precio de compra específico en tu respuesta — ese dato se calcula recién cuando se chequea la alerta, no al crearla. Si no lo verificaste llamando get_portfolio_summary en este mismo turno, no digas una cifra.
+2. Watchlist/alertas/metas: LLAMAR la herramienta, no prometérselo. Para alertas de % de movimiento usar manage_pct_alerts (precio siempre externo vía yfinance, no Wallbit). Wallbit hoy NO expone el costo promedio de compra en get_stocks_balance — si el usuario pide una alerta referencia="compra", PREGUNTALE su precio de compra si no lo mencionó, y pasalo en avg_cost_manual. Sin ese dato la alerta queda creada pero inerte. NUNCA inventes ni menciones un precio de compra específico que el usuario no te dio.
 2b. ACCIONES EN LOTE (crear/editar varias cosas a la vez, ej "creá esto para todas mis posiciones"): llamá las herramientas DIRECTAMENTE una por una, sin narrar el plan completo en texto antes. Si son muchos ítems (10+), no expliques cada uno de antemano — actuá primero, resumí al final.
 3. Detectar sesgos (FOMO, anclaje) y avisar.
 4. DECISION LOG: Al terminar cualquier análisis de un ticker, usar decision_log(guardar) con el veredicto (alcista/bajista/neutral) y el razonamiento en 1 línea. Al iniciar un nuevo análisis del mismo ticker, leer primero el historial para comparar si la tesis anterior fue correcta.
@@ -891,14 +900,15 @@ def verificar_alertas_pct() -> list:
         except Exception:
             pass
 
-    for alerta_id, ticker, umbral_pct, direccion, referencia in alertas:
+    for alerta_id, ticker, umbral_pct, direccion, referencia, avg_cost_manual in alertas:
         info = market_data.yf_get_price_change(ticker)
         if not info["ok"]:
             continue
         precio_actual = info["data"]["precio_actual"]
 
         if referencia == "compra":
-            avg_cost = avg_costs.get(ticker)
+            # Wallbit no expone avg_cost hoy — priorizar el precio manual si existe
+            avg_cost = avg_cost_manual or avg_costs.get(ticker)
             if not avg_cost:
                 continue
             cambio_pct = round((precio_actual / avg_cost - 1) * 100, 2)
