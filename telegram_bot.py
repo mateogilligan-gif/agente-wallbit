@@ -63,7 +63,7 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def alertas(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not es_autorizado(update):
         return
-    disparadas = agente.verificar_alertas()
+    disparadas = agente.verificar_alertas() + agente.verificar_alertas_pct()
     if disparadas:
         await update.message.reply_text("🔔 *Alertas disparadas:*\n" + "\n".join(disparadas), parse_mode="Markdown")
     else:
@@ -131,12 +131,22 @@ async def mensaje_libre(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await enviar_respuesta_larga(update, respuesta)
 
 
+async def _enviar_texto_largo_bot(bot, chat_id: int, texto: str, parse_mode: str = None):
+    """Igual que enviar_respuesta_larga pero para jobs automáticos (no tienen Update)."""
+    MAX_LEN = 4000
+    if len(texto) <= MAX_LEN:
+        await bot.send_message(chat_id=chat_id, text=texto, parse_mode=parse_mode)
+    else:
+        for i in range(0, len(texto), MAX_LEN):
+            await bot.send_message(chat_id=chat_id, text=texto[i:i+MAX_LEN], parse_mode=parse_mode)
+
+
 async def verificar_alertas_periodico(context: ContextTypes.DEFAULT_TYPE):
     """Chequea alertas cada 30 minutos y notifica si hay disparadas."""
-    disparadas = agente.verificar_alertas()
+    disparadas = agente.verificar_alertas() + agente.verificar_alertas_pct()
     if disparadas and AUTHORIZED_USER_ID:
         texto = "🔔 *Alertas de precio:*\n" + "\n".join(disparadas)
-        await context.bot.send_message(chat_id=AUTHORIZED_USER_ID, text=texto, parse_mode="Markdown")
+        await _enviar_texto_largo_bot(context.bot, AUTHORIZED_USER_ID, texto, parse_mode="Markdown")
 
 
 async def earnings_diarios(context: ContextTypes.DEFAULT_TYPE):
@@ -144,7 +154,7 @@ async def earnings_diarios(context: ContextTypes.DEFAULT_TYPE):
     proximos = agente.verificar_earnings_portfolio(days=7)
     if proximos and AUTHORIZED_USER_ID:
         texto = "EARNINGS ESTA SEMANA\n\n" + "\n".join(proximos)
-        await context.bot.send_message(chat_id=AUTHORIZED_USER_ID, text=texto)
+        await _enviar_texto_largo_bot(context.bot, AUTHORIZED_USER_ID, texto)
 
 
 def main():

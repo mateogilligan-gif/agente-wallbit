@@ -18,6 +18,7 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS configuracion (clave TEXT PRIMARY KEY, valor TEXT, actualizado TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS bitacora (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, tipo TEXT, descripcion TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS decision_log (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, ticker TEXT, precio_momento REAL, veredicto TEXT, razonamiento TEXT, resultado TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS alertas_pct (id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT, umbral_pct REAL, direccion TEXT, referencia TEXT, activa INTEGER DEFAULT 1, fecha_creacion TEXT, fecha_disparada TEXT)''')
     conn.commit()
     conn.close()
 
@@ -221,6 +222,40 @@ def actualizar_resultado_decision(ticker, resultado):
     )
     conn.commit()
     conn.close()
+
+# ─── Alertas por porcentaje (precio externo, no depende de Wallbit) ───────────
+
+def crear_alerta_pct(ticker, umbral_pct, direccion="ambas", referencia="dia"):
+    """
+    direccion: 'sube' | 'baja' | 'ambas'
+    referencia: 'dia' (vs cierre anterior) | 'compra' (vs avg_cost de Wallbit)
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO alertas_pct (ticker, umbral_pct, direccion, referencia, fecha_creacion) VALUES (?, ?, ?, ?, ?)",
+        (ticker.upper(), umbral_pct, direccion, referencia, datetime.now().isoformat())
+    )
+    conn.commit()
+    conn.close()
+
+def obtener_alertas_pct_activas():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id, ticker, umbral_pct, direccion, referencia FROM alertas_pct WHERE activa = 1")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def desactivar_alerta_pct(alerta_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE alertas_pct SET activa = 0, fecha_disparada = ? WHERE id = ?",
+              (datetime.now().isoformat(), alerta_id))
+    eliminado = conn.total_changes > 0
+    conn.commit()
+    conn.close()
+    return eliminado
 
 # ─── Bitácora ──────────────────────────────────────────────────────────────────
 

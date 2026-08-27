@@ -29,6 +29,35 @@ def yf_get_info(ticker: str) -> dict:
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+def yf_get_price_change(ticker: str) -> dict:
+    """
+    Precio actual y % de cambio vs el cierre anterior, 100% desde yfinance
+    (fuente externa — no depende de la API de Wallbit).
+    """
+    try:
+        import yfinance as yf
+        t = yf.Ticker(ticker)
+        info = t.info
+        precio_actual = info.get("currentPrice") or info.get("regularMarketPrice")
+        cierre_anterior = info.get("regularMarketPreviousClose") or info.get("previousClose")
+
+        if precio_actual is None or cierre_anterior is None or cierre_anterior == 0:
+            return {"ok": False, "error": f"Sin datos de precio para {ticker}"}
+
+        cambio_pct = round((precio_actual / cierre_anterior - 1) * 100, 2)
+        return {
+            "ok": True,
+            "data": {
+                "ticker": ticker,
+                "precio_actual": precio_actual,
+                "cierre_anterior": cierre_anterior,
+                "cambio_pct_dia": cambio_pct
+            }
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 def yf_get_history(ticker: str, period: str = "1y") -> dict:
     """Historial de precios. period: 1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y."""
     try:
@@ -73,6 +102,7 @@ def yf_get_insiders(ticker: str) -> dict:
     """Compras y ventas de insiders (directivos)."""
     try:
         import yfinance as yf
+        import pandas as pd
         t = yf.Ticker(ticker)
         insider = t.insider_transactions
         if insider is None or insider.empty:
@@ -80,13 +110,24 @@ def yf_get_insiders(ticker: str) -> dict:
         insider = insider.head(15)
         result = []
         for _, row in insider.iterrows():
+            # yfinance ≥0.2.x renombró las columnas a PascalCase con espacios
+            def g(new, old, default=""):
+                """Busca el campo nuevo y cae al viejo si no existe (compatibilidad)."""
+                v = row.get(new)
+                if v is None or (isinstance(v, float) and pd.isna(v)):
+                    v = row.get(old, default)
+                return v
+
+            shares_val = g("Shares", "shares", 0)
+            value_val = g("Value", "value")
+            fecha_raw = g("Start Date", "startDate", "")
             result.append({
-                "fecha": str(row.get("startDate", ""))[:10],
-                "nombre": str(row.get("filerName", "")),
-                "cargo": str(row.get("filerRelation", "")),
-                "accion": str(row.get("transactionText", "")),
-                "acciones": int(row.get("shares", 0)),
-                "valor_usd": int(row.get("value", 0)) if row.get("value") else None
+                "fecha": str(fecha_raw)[:10],
+                "nombre": str(g("Insider", "filerName")),
+                "cargo": str(g("Position", "filerRelation")),
+                "accion": str(g("Text", "transactionText")),
+                "acciones": int(shares_val) if pd.notna(shares_val) else 0,
+                "valor_usd": int(float(value_val)) if (value_val is not None and value_val != "" and pd.notna(value_val)) else None
             })
         return {"ok": True, "data": result}
     except Exception as e:
@@ -292,9 +333,6 @@ def yf_get_options(ticker: str) -> dict:
         return {"ok": False, "error": str(e)}
 
 # ─── FRED (Federal Reserve Economic Data) ─────────────────────────────────────
-
-FRED_BASE = "https://api.stlouisfed.org/fred"
-FRED_KEY = "abcdefghijklmnop"  # FRED permite acceso sin key para series públicas via alternativa
 
 FRED_SERIES = {
     "inflacion_cpi": "CPIAUCSL",

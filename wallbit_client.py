@@ -4,6 +4,14 @@ import json
 import re
 from typing import Optional
 
+# Claves que NUNCA son un ticker, aunque aparezcan como clave de nivel raíz
+# en la respuesta de Wallbit (evita que el parser las confunda con posiciones).
+CLAVES_NO_TICKER = {
+    "cash", "balance", "available", "amount", "total", "total_value",
+    "currency", "updated_at", "timestamp", "created_at", "date", "id",
+    "user_id", "account_id", "status", "ok", "error", "message"
+}
+
 WALLBIT_BASE_URL = "https://mcp.wallbit.io/mcp"
 _initialized = False
 
@@ -11,7 +19,7 @@ def get_headers():
     return {
         "X-API-Key": os.getenv("WALLBIT_API_KEY"),
         "Content-Type": "application/json",
-        "Accept": "application/json"
+        "Accept": "application/json, text/event-stream"  # MCP sobre HTTP/SSE requiere ambos
     }
 
 def _initialize():
@@ -58,18 +66,33 @@ def _call_tool(tool_name: str, params: Optional[dict] = None) -> dict:
     try:
         response = requests.post(WALLBIT_BASE_URL, json=payload, headers=get_headers(), timeout=15)
         response.raise_for_status()
-        result = response.json()
+
+        # Wallbit MCP responde en formato SSE: "event: message\ndata: {...}\n"
+        # response.json() fallaría porque el body no es JSON puro.
+        result = None
+        for line in response.text.strip().split("\n"):
+            if line.startswith("data:"):
+                result = json.loads(line[5:].strip())
+                break
+        if result is None:
+            return {"ok": False, "error": "⚠️ ERROR WALLBIT: Respuesta SSE inválida o vacía"}
 
         if "error" in result:
             return {"ok": False, "error": result["error"].get("message", "Error desconocido de Wallbit")}
 
         if "result" in result:
-            # El MCP devuelve content como array de objetos
-            content = result["result"].get("content", [])
+            res = result["result"]
+            # isError=True significa que la herramienta devolvió un error lógico (ej: Zod validation)
+            if res.get("isError"):
+                content = res.get("content", [])
+                error_text = content[0].get("text", "Error desconocido") if content else "Error desconocido"
+                return {"ok": False, "error": f"⚠️ ERROR WALLBIT: {error_text}"}
+            # Contenido normal: array de objetos {type, text}
+            content = res.get("content", [])
             if content and isinstance(content, list):
                 texto = "\n".join([c.get("text", "") for c in content if c.get("type") == "text"])
                 return {"ok": True, "data": texto}
-            return {"ok": True, "data": result["result"]}
+            return {"ok": True, "data": res}
 
         return {"ok": False, "error": "Respuesta inesperada del servidor Wallbit"}
 
@@ -122,12 +145,24 @@ def _parse_portfolio_text(texto: str) -> list:
             items = (
                 data.get("positions") or data.get("stocks") or
                 data.get("holdings") or data.get("assets") or
-                data.get("portfolio") or []
+                data.get("portfolio") or data.get("data") or []  # Wallbit usa "data"
             )
             if not items and any(isinstance(v, (int, float, dict)) for v in data.values()):
-                # Podría ser {AAPL: {...}, MSFT: {...}}
-                items = [{"ticker": k, **v} if isinstance(v, dict) else {"ticker": k, "market_value": v}
-                         for k, v in data.items()]
+                # Podría ser {AAPL: {...}, MSFT: {...}} — pero solo tratar una clave
+                # como ticker si parece un ticker real (letras/dígitos, corto, no es
+                # un campo conocido tipo "cash"/"balance"/"updated_at").
+                items = []
+                for k, v in data.items():
+                    clave_valida = (
+                        k.lower() not in CLAVES_NO_TICKER
+                        and re.fullmatch(r"[A-Za-z]{1,6}", k) is not None
+                    )
+                    if not clave_valida:
+                        continue
+                    if isinstance(v, dict):
+                        items.append({"ticker": k, **v})
+                    else:
+                        items.append({"ticker": k, "market_value": v})
         else:
             items = []
 
@@ -139,6 +174,9 @@ def _parse_portfolio_text(texto: str) -> list:
                 item.get("asset") or item.get("name") or ""
             ).upper().strip()
             if not ticker:
+                continue
+            # Filtrar entradas de cash/moneda que Wallbit incluye mezcladas con acciones
+            if ticker in {"USD", "ARS", "EUR", "GBP", "BTC", "ETH", "USDT", "USDC", "BUSD"}:
                 continue
 
             pos = {"ticker": ticker}
@@ -211,10 +249,24 @@ def format_portfolio_summary(checking_res: dict, stocks_res: dict) -> str:
         raw = checking_res["data"]
         try:
             d = json.loads(raw) if isinstance(raw, str) else raw
-            balance = (
-                d.get("balance") or d.get("available") or
-                d.get("amount") or d.get("cash") or raw
-            )
+            balance = None
+            # Formato plano: {"balance": 183.81}
+            for clave in ("balance", "available", "amount", "cash"):
+                if isinstance(d, dict) and d.get(clave) is not None:
+                    balance = d[clave]
+                    break
+            # Formato anidado de Wallbit: {"data": [{"currency": "USD", "balance": 183.81}]}
+            if balance is None and isinstance(d, dict) and isinstance(d.get("data"), list):
+                for entry in d["data"]:
+                    if isinstance(entry, dict):
+                        for clave in ("balance", "available", "amount", "cash"):
+                            if entry.get(clave) is not None:
+                                balance = entry[clave]
+                                break
+                    if balance is not None:
+                        break
+            if balance is None:
+                balance = raw
             lines.append(f"CUENTA CORRIENTE: ${balance}")
         except Exception:
             lines.append(f"CUENTA CORRIENTE: {raw}")

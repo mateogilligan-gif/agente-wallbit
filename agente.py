@@ -11,7 +11,8 @@ from database import (
     crear_presupuesto, obtener_presupuestos, actualizar_gasto_presupuesto,
     crear_meta, obtener_metas, actualizar_progreso_meta,
     guardar_trade_diario,
-    guardar_decision, obtener_decisiones_ticker, actualizar_resultado_decision
+    guardar_decision, obtener_decisiones_ticker, actualizar_resultado_decision,
+    crear_alerta_pct, obtener_alertas_pct_activas, desactivar_alerta_pct
 )
 import wallbit_client
 import brave_client
@@ -65,8 +66,24 @@ TOOLS = [
     },
     {
         "name": "manage_alerts",
-        "description": "Alertas de precio: crear/eliminar/listar.",
+        "description": "Alertas de precio ABSOLUTO: crear/eliminar/listar (ej 'avisame si AAPL baja de $150'). Para alertas de PORCENTAJE de movimiento (ej 'avisame si sube más de 5%'), usar manage_pct_alerts.",
         "input_schema": {"type": "object", "properties": {"accion": {"type": "string", "enum": ["crear", "eliminar", "listar"]}, "ticker": {"type": "string"}, "precio": {"type": "number"}, "tipo": {"type": "string", "enum": ["minimo", "maximo"]}, "alerta_id": {"type": "integer"}}, "required": ["accion"]}
+    },
+    {
+        "name": "manage_pct_alerts",
+        "description": "Alertas de PORCENTAJE de movimiento sobre un ticker (crear/eliminar/listar). El precio siempre se obtiene de yfinance (fuente externa), no de Wallbit. Dos referencias posibles: 'dia' (% vs cierre de ayer, para detectar movimientos bruscos intradía) o 'compra' (% vs tu precio promedio de compra en Wallbit, para trackear ganancia/pérdida no realizada). Ejemplos: 'avisame si AAPL se mueve más de 5% hoy' (referencia=dia), 'avisame si alguna posición ganó más de 20% desde que la compré' (referencia=compra).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "accion": {"type": "string", "enum": ["crear", "eliminar", "listar"]},
+                "ticker": {"type": "string"},
+                "umbral_pct": {"type": "number", "description": "Ej 5 = 5%"},
+                "direccion": {"type": "string", "enum": ["sube", "baja", "ambas"], "description": "Default: ambas"},
+                "referencia": {"type": "string", "enum": ["dia", "compra"], "description": "Default: dia"},
+                "alerta_id": {"type": "integer"}
+            },
+            "required": ["accion"]
+        }
     },
     {
         "name": "manage_budget",
@@ -277,6 +294,8 @@ def ejecutar_herramienta(nombre: str, inputs: dict) -> str:
                     resultado = {"ok": True, "data": [{"ticker": r[0], "precio_alerta": r[1], "notas": r[2]} for r in wl]}
                 else:
                     resultado = {"ok": True, "data": "La watchlist está vacía"}
+            else:
+                resultado = {"ok": False, "error": f"Acción desconocida para manage_watchlist: {accion}"}
 
         # ── Alertas ──
         elif nombre == "manage_alerts":
@@ -301,6 +320,39 @@ def ejecutar_herramienta(nombre: str, inputs: dict) -> str:
                     resultado = {"ok": True, "data": [{"id": a[0], "ticker": a[1], "precio_objetivo": a[2], "tipo": a[3]} for a in alertas]}
                 else:
                     resultado = {"ok": True, "data": "No hay alertas activas"}
+            else:
+                resultado = {"ok": False, "error": f"Acción desconocida para manage_alerts: {accion}"}
+
+        # ── Alertas de porcentaje ──
+        elif nombre == "manage_pct_alerts":
+            accion = inputs["accion"]
+            if accion == "crear":
+                ticker = inputs.get("ticker", "").upper()
+                umbral_pct = inputs.get("umbral_pct")
+                direccion = inputs.get("direccion", "ambas")
+                referencia = inputs.get("referencia", "dia")
+                if not ticker or umbral_pct is None:
+                    return "Error: se necesita ticker y umbral_pct para crear la alerta"
+                crear_alerta_pct(ticker, umbral_pct, direccion, referencia)
+                ref_str = "hoy vs cierre anterior" if referencia == "dia" else "desde tu precio de compra"
+                resultado = {"ok": True, "data": f"✅ Alerta creada: avisar si {ticker} se mueve {direccion} {umbral_pct}% ({ref_str})"}
+            elif accion == "eliminar":
+                alerta_id = inputs.get("alerta_id")
+                if alerta_id is None:
+                    return "Error: se necesita alerta_id para eliminar"
+                ok = desactivar_alerta_pct(alerta_id)
+                resultado = {"ok": True, "data": f"{'✅ Alerta #' + str(alerta_id) + ' desactivada' if ok else '⚠️ No se encontró la alerta'}"}
+            elif accion == "listar":
+                alertas_pct = obtener_alertas_pct_activas()
+                if alertas_pct:
+                    resultado = {"ok": True, "data": [
+                        {"id": a[0], "ticker": a[1], "umbral_pct": a[2], "direccion": a[3], "referencia": a[4]}
+                        for a in alertas_pct
+                    ]}
+                else:
+                    resultado = {"ok": True, "data": "No hay alertas de porcentaje activas"}
+            else:
+                resultado = {"ok": False, "error": f"Acción desconocida para manage_pct_alerts: {accion}"}
 
         # ── Presupuesto ──
         elif nombre == "manage_budget":
@@ -325,6 +377,8 @@ def ejecutar_herramienta(nombre: str, inputs: dict) -> str:
                     return "Error: se necesita categoría y monto_adicional"
                 actualizar_gasto_presupuesto(categoria, monto)
                 resultado = {"ok": True, "data": f"✅ Sumado ${monto} al gasto de '{categoria}'"}
+            else:
+                resultado = {"ok": False, "error": f"Acción desconocida para manage_budget: {accion}"}
 
         # ── Metas ──
         elif nombre == "manage_goals":
@@ -349,6 +403,8 @@ def ejecutar_herramienta(nombre: str, inputs: dict) -> str:
                     return "Error: se necesita nombre y actual_usd"
                 actualizar_progreso_meta(nombre_meta, actual)
                 resultado = {"ok": True, "data": f"✅ Progreso de '{nombre_meta}' actualizado a ${actual}"}
+            else:
+                resultado = {"ok": False, "error": f"Acción desconocida para manage_goals: {accion}"}
 
         # ── Configuración ──
         elif nombre == "save_config":
@@ -363,6 +419,8 @@ def ejecutar_herramienta(nombre: str, inputs: dict) -> str:
             elif accion == "leer":
                 valor = obtener_config(clave)
                 resultado = {"ok": True, "data": {clave: valor if valor else "no configurado"}}
+            else:
+                resultado = {"ok": False, "error": f"Acción desconocida para save_config: {accion}"}
 
         # ── Diario de trading ──
         elif nombre == "trading_diary":
@@ -386,6 +444,8 @@ def ejecutar_herramienta(nombre: str, inputs: dict) -> str:
                     ]}
                 else:
                     resultado = {"ok": True, "data": "El diario de trading está vacío"}
+            else:
+                resultado = {"ok": False, "error": f"Acción desconocida para trading_diary: {accion}"}
 
         elif nombre == "yf_info":
             resultado = market_data.yf_get_info(inputs["ticker"])
@@ -436,6 +496,8 @@ def ejecutar_herramienta(nombre: str, inputs: dict) -> str:
                     resultado = {"ok": True, "data": historial}
                 else:
                     resultado = {"ok": True, "data": f"Sin historial previo de decisiones para {ticker}"}
+            else:
+                resultado = {"ok": False, "error": f"Acción desconocida para decision_log: {accion}"}
 
         # ── Bull vs Bear ──
         elif nombre == "bull_bear_analysis":
@@ -504,7 +566,7 @@ def _ejecutar_bull_bear(ticker: str, contexto: str = "") -> str:
     # Buscar datos básicos de noticias para ambos
     noticias = ""
     try:
-        items = brave_client.search_news(f"{ticker} stock news 2025", count=4)
+        items = brave_client.search_news(f"{ticker} stock news {datetime.now().year}", count=4)
         if items:
             noticias = "\n".join([f"- {n.get('titulo', '')} ({n.get('fuente', '')})" for n in items[:4]])
     except Exception:
@@ -556,7 +618,7 @@ ESTILO: Directo, sin relleno, sin emojis. Priorizo entender el negocio sobre los
 
 REGLAS:
 1. create_trade: SOLO con SÍ/CONFIRMO explícito. Mostrar ticket antes.
-2. Watchlist/alertas/metas: LLAMAR la herramienta, no prometérselo.
+2. Watchlist/alertas/metas: LLAMAR la herramienta, no prometérselo. Para alertas de % de movimiento usar manage_pct_alerts (precio siempre externo vía yfinance, no Wallbit).
 3. Detectar sesgos (FOMO, anclaje) y avisar.
 4. DECISION LOG: Al terminar cualquier análisis de un ticker, usar decision_log(guardar) con el veredicto (alcista/bajista/neutral) y el razonamiento en 1 línea. Al iniciar un nuevo análisis del mismo ticker, leer primero el historial para comparar si la tesis anterior fue correcta.
 5. PROFUNDIDAD: Si el mensaje dice "rápido" o "quick" → 1 brave_search + yf_info. Si dice "profundo" o "deep" → hasta 3 brave_search + yf_info + yf_financials + sec_filings. Por defecto: 1 brave_search + yf_info.
@@ -620,6 +682,32 @@ RESEARCH PROFUNDO — cuando el usuario pida "metete en la web de [empresa]", "b
 
 # ─── Función principal de chat con Tool Use ───────────────────────────────────
 
+def _sanitizar_alternancia(mensajes: list) -> list:
+    """
+    La API de Anthropic exige turnos estrictamente alternados user/assistant.
+    Si el historial guardado en la DB quedó con turnos repetidos seguidos
+    (por ejemplo porque una respuesta anterior falló y no se guardó), esta
+    función los fusiona para que la conversación quede siempre alternada
+    antes de mandarla a la API.
+    """
+    if not mensajes:
+        return mensajes
+    limpios = [mensajes[0]]
+    for m in mensajes[1:]:
+        if m["role"] == limpios[-1]["role"]:
+            # Mismo rol que el anterior: fusionar en vez de mandar duplicado
+            if isinstance(limpios[-1]["content"], str) and isinstance(m["content"], str):
+                limpios[-1]["content"] += f"\n\n{m['content']}"
+            else:
+                limpios[-1] = m  # contenido no-string (bloques de tool use): priorizar el más nuevo
+        else:
+            limpios.append(m)
+    # Debe arrancar en "user"
+    if limpios and limpios[0]["role"] != "user":
+        limpios = limpios[1:]
+    return limpios
+
+
 def chat(mensaje_usuario: str, contexto_extra: str = "") -> str:
     """Procesa un mensaje usando Anthropic Tool Use para llamadas reales a Wallbit."""
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
@@ -637,6 +725,9 @@ def chat(mensaje_usuario: str, contexto_extra: str = "") -> str:
         contenido = f"{contexto_extra}\n\nMensaje: {mensaje_usuario}"
     messages.append({"role": "user", "content": contenido})
 
+    # Defensa ante historial ya corrupto (turnos repetidos guardados en sesiones anteriores)
+    messages = _sanitizar_alternancia(messages)
+
     # Loop de tool use: Claude puede llamar múltiples herramientas en secuencia
     MAX_ITERACIONES = 10
     for _ in range(MAX_ITERACIONES):
@@ -651,6 +742,9 @@ def chat(mensaje_usuario: str, contexto_extra: str = "") -> str:
         except anthropic.APIError as e:
             error = f"⚠️ Error de API: {str(e)}"
             registrar_bitacora("error", error)
+            # Guardar SIEMPRE una respuesta, aunque sea de error — si no, el próximo
+            # mensaje queda con dos turnos "user" seguidos y la API los rechaza.
+            guardar_mensaje("assistant", error)
             return error
 
         # Claude terminó de responder (end_turn o max_tokens)
@@ -683,7 +777,9 @@ def chat(mensaje_usuario: str, contexto_extra: str = "") -> str:
 
         break
 
-    return "⚠️ No pude completar la respuesta. Intentá de nuevo."
+    fallback = "⚠️ No pude completar la respuesta. Intentá de nuevo."
+    guardar_mensaje("assistant", fallback)
+    return fallback
 
 # ─── Funciones auxiliares ──────────────────────────────────────────────────────
 
@@ -767,6 +863,62 @@ def verificar_alertas() -> list:
             except Exception:
                 pass
     return alertas_disparadas
+
+
+def verificar_alertas_pct() -> list:
+    """
+    Chequea las alertas de porcentaje. El precio SIEMPRE sale de yfinance
+    (externo, no depende de get_asset de Wallbit, que hoy está roto).
+    Para alertas referencia='compra' se usa avg_cost de get_stocks_balance
+    (esa herramienta de Wallbit sí funciona) combinado con el precio externo.
+    """
+    disparadas = []
+    alertas = obtener_alertas_pct_activas()
+    if not alertas:
+        return disparadas
+
+    # Traer avg_cost una sola vez si hace falta para alertas tipo "compra"
+    avg_costs = {}
+    if any(a[4] == "compra" for a in alertas):
+        try:
+            res = wallbit_client.get_stocks_balance()
+            if res.get("ok"):
+                raw = res["data"]
+                raw_str = raw if isinstance(raw, str) else json.dumps(raw)
+                posiciones = wallbit_client._parse_portfolio_text(raw_str)
+                avg_costs = {p["ticker"]: p.get("avg_cost") for p in posiciones if p.get("ticker") and p.get("avg_cost")}
+        except Exception:
+            pass
+
+    for alerta_id, ticker, umbral_pct, direccion, referencia in alertas:
+        info = market_data.yf_get_price_change(ticker)
+        if not info["ok"]:
+            continue
+        precio_actual = info["data"]["precio_actual"]
+
+        if referencia == "compra":
+            avg_cost = avg_costs.get(ticker)
+            if not avg_cost:
+                continue
+            cambio_pct = round((precio_actual / avg_cost - 1) * 100, 2)
+            ref_str = "desde tu compra"
+        else:
+            cambio_pct = info["data"]["cambio_pct_dia"]
+            ref_str = "hoy"
+
+        dispara = (
+            (direccion in ("sube", "ambas") and cambio_pct >= umbral_pct) or
+            (direccion in ("baja", "ambas") and cambio_pct <= -umbral_pct)
+        )
+
+        if dispara:
+            signo = "+" if cambio_pct >= 0 else ""
+            disparadas.append(
+                f"📈 {ticker} se movió {signo}{cambio_pct:.2f}% {ref_str} "
+                f"(umbral: {umbral_pct}%, precio actual ${precio_actual:.2f})"
+            )
+
+    return disparadas
 
 # ─── Modo consola para testing ─────────────────────────────────────────────────
 
