@@ -35,14 +35,35 @@ def clear_cache():
     _cache.clear()
 
 
+def _parse_google_news_xml(contenido, pais: str, idioma: str, count: int) -> list:
+    """
+    Lógica PURA de parseo del RSS de Google News. Separada de la llamada de
+    red para poder testearla sin internet.
+    """
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(contenido, "xml")
+    items = soup.find_all("item")[:count]
+
+    resultados = []
+    for it in items:
+        titulo = it.title.get_text(strip=True) if it.title else ""
+        link = it.link.get_text(strip=True) if it.link else ""
+        fecha = it.pubDate.get_text(strip=True) if it.pubDate else ""
+        fuente_tag = it.find("source")
+        fuente = fuente_tag.get_text(strip=True) if fuente_tag else ""
+        resultados.append({
+            "titulo": titulo, "url": link, "fuente": fuente,
+            "fecha": fecha, "pais": pais, "idioma": idioma
+        })
+    return resultados
+
+
 def google_news_search(query: str, pais: str = None, idioma: str = None, count: int = 10) -> dict:
     """
     Busca en Google News RSS, filtrando por país (código ISO ej AU, DE, AR, JP)
     e idioma (código ISO ej en, es, de, ja). Sin API key.
     """
     try:
-        from bs4 import BeautifulSoup
-
         idioma = (idioma or "en").lower()
         pais = (pais or "US").upper()
         ceid = f"{pais}:{idioma}"
@@ -52,21 +73,7 @@ def google_news_search(query: str, pais: str = None, idioma: str = None, count: 
         r = requests.get(url, headers=HEADERS, timeout=12)
         r.raise_for_status()
 
-        soup = BeautifulSoup(r.content, "xml")
-        items = soup.find_all("item")[:count]
-
-        resultados = []
-        for it in items:
-            titulo = it.title.get_text(strip=True) if it.title else ""
-            link = it.link.get_text(strip=True) if it.link else ""
-            fecha = it.pubDate.get_text(strip=True) if it.pubDate else ""
-            fuente_tag = it.find("source")
-            fuente = fuente_tag.get_text(strip=True) if fuente_tag else ""
-            resultados.append({
-                "titulo": titulo, "url": link, "fuente": fuente,
-                "fecha": fecha, "pais": pais, "idioma": idioma
-            })
-
+        resultados = _parse_google_news_xml(r.content, pais, idioma, count)
         return {"ok": True, "data": resultados}
     except ImportError:
         return {"ok": False, "error": "Falta beautifulsoup4/lxml instalado"}

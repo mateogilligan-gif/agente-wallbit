@@ -20,6 +20,7 @@ import market_data
 import web_reader
 import global_search
 import social_sentiment
+import reddit_client
 
 # ─── Definición de herramientas para Anthropic Tool Use ───────────────────────
 
@@ -215,6 +216,19 @@ TOOLS = [
         "name": "sentimiento_social",
         "description": "Sentimiento de la comunidad de StockTwits (red social 100% financiera) sobre un ticker: % de mensajes Bullish vs Bearish, etiquetados por los propios usuarios. Mucho menos ruido que X/Twitter porque es una comunidad exclusiva de trading. Usar cuando el usuario pregunte 'qué dice la gente', 'sentimiento del mercado minorista', 'hype', o quiera pulso social de una acción.",
         "input_schema": {"type": "object", "properties": {"ticker": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["ticker"]}
+    },
+    {
+        "name": "reddit_sentiment",
+        "description": "Busca menciones de un ticker/empresa en subreddits financieros (r/wallstreetbets, r/stocks, r/investing, r/StockMarket) de la última semana, rankeadas por score (upvotes). Complementa a sentimiento_social (StockTwits): Reddit trae discusión más larga y con contexto, StockTwits trae el pulso Bullish/Bearish más directo. Usar cuando pidan 'qué dice reddit', 'hay hype en wallstreetbets', o sentimiento retail más profundo.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Ticker o nombre de empresa a buscar"},
+                "subreddits": {"type": "array", "items": {"type": "string"}, "description": "Opcional, default: wallstreetbets, stocks, investing, StockMarket"},
+                "limit": {"type": "integer"}
+            },
+            "required": ["query"]
+        }
     },
     {
         "name": "leer_pagina_web",
@@ -521,6 +535,14 @@ def ejecutar_herramienta(nombre: str, inputs: dict) -> str:
                 inputs.get("limit", 30)
             )
 
+        # ── Reddit ──
+        elif nombre == "reddit_sentiment":
+            resultado = reddit_client.search_reddit(
+                inputs["query"],
+                inputs.get("subreddits"),
+                inputs.get("limit", 10)
+            )
+
         # ── Búsqueda global de noticias ──
         elif nombre == "busqueda_global":
             resultado = global_search.busqueda_global(
@@ -650,8 +672,8 @@ Usá brave_search + yf_info. El foco es entender el negocio, no recitar balances
 
 5. NÚMEROS (resumido): Solo 4 métricas — revenue del último año, crecimiento YoY, si es rentable o quema caja, y deuda. Nada más. Si el negocio no convence, los números no importan.
 
-SENTIMIENTO SOCIAL — solo si el usuario lo pide explícitamente ("qué dice la gente", "hype", "sentimiento del mercado"):
-Usar sentimiento_social (StockTwits). Aclarar siempre que es sentimiento de retail/comunidad, no un indicador fundamental — sirve para detectar euforia o pánico excesivo, no para tomar la decisión de inversión en sí.
+SENTIMIENTO SOCIAL — solo si el usuario lo pide explícitamente ("qué dice la gente", "hype", "sentimiento del mercado", "qué dice reddit"):
+Usar sentimiento_social (StockTwits) para el pulso rápido Bullish/Bearish, y reddit_sentiment cuando quieran más contexto o discusión (menciona el score/upvotes de cada post para que el usuario juzgue qué tan respaldado está). Aclarar SIEMPRE que es sentimiento de retail/comunidad, no un indicador fundamental — sirve para detectar euforia o pánico excesivo, no para tomar la decisión de inversión en sí.
 
 BÚSQUEDA DE RIESGOS EN FILINGS — cuando pidan "qué dice el 10-K sobre X riesgo", "buscá menciones de [tema] en los reportes", o quieran validar un riesgo puntual (cadena de suministro, concentración de clientes, litigios):
 Usar sec_busqueda_texto con el ticker y la frase exacta a buscar (ej: "supply chain disruption", "customer concentration"). Esto busca DENTRO del contenido real de los documentos, no solo lista cuáles existen — mucho más preciso que sec_filings para encontrar un riesgo específico.
@@ -875,6 +897,20 @@ def verificar_alertas() -> list:
     return alertas_disparadas
 
 
+def _evaluar_disparo_pct(precio_actual: float, precio_referencia: float, umbral_pct: float, direccion: str) -> tuple:
+    """
+    Lógica PURA de cálculo de % de cambio y si dispara o no una alerta.
+    Separada del resto (que hace llamadas de red) para poder testearla sola.
+    Devuelve (cambio_pct, dispara: bool).
+    """
+    cambio_pct = round((precio_actual / precio_referencia - 1) * 100, 2)
+    dispara = (
+        (direccion in ("sube", "ambas") and cambio_pct >= umbral_pct) or
+        (direccion in ("baja", "ambas") and cambio_pct <= -umbral_pct)
+    )
+    return cambio_pct, dispara
+
+
 def verificar_alertas_pct() -> list:
     """
     Chequea las alertas de porcentaje. El precio SIEMPRE sale de yfinance
@@ -911,16 +947,12 @@ def verificar_alertas_pct() -> list:
             avg_cost = avg_cost_manual or avg_costs.get(ticker)
             if not avg_cost:
                 continue
-            cambio_pct = round((precio_actual / avg_cost - 1) * 100, 2)
+            cambio_pct, dispara = _evaluar_disparo_pct(precio_actual, avg_cost, umbral_pct, direccion)
             ref_str = "desde tu compra"
         else:
-            cambio_pct = info["data"]["cambio_pct_dia"]
+            cierre_anterior = info["data"]["cierre_anterior"]
+            cambio_pct, dispara = _evaluar_disparo_pct(precio_actual, cierre_anterior, umbral_pct, direccion)
             ref_str = "hoy"
-
-        dispara = (
-            (direccion in ("sube", "ambas") and cambio_pct >= umbral_pct) or
-            (direccion in ("baja", "ambas") and cambio_pct <= -umbral_pct)
-        )
 
         if dispara:
             signo = "+" if cambio_pct >= 0 else ""

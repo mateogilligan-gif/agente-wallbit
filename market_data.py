@@ -29,6 +29,25 @@ def yf_get_info(ticker: str) -> dict:
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+def _parse_stooq_csv(texto: str):
+    """
+    Lógica PURA de parseo del CSV diario de Stooq (Date,Open,High,Low,Close,Volume).
+    Separada de la llamada de red para poder testearla sin internet.
+    Devuelve (precio_actual, cierre_anterior) o None si el formato no es válido.
+    """
+    lineas = [l for l in texto.strip().split("\n") if l]
+    if len(lineas) < 3:
+        return None
+    try:
+        ultima = lineas[-1].split(",")
+        penultima = lineas[-2].split(",")
+        precio_actual = float(ultima[4])   # columna Close
+        cierre_anterior = float(penultima[4])
+        return precio_actual, cierre_anterior
+    except (ValueError, IndexError):
+        return None
+
+
 def _get_price_stooq(ticker: str):
     """
     Respaldo de último recurso: Stooq, una fuente 100% independiente de Yahoo
@@ -40,14 +59,7 @@ def _get_price_stooq(ticker: str):
         url = f"https://stooq.com/q/d/l/?s={ticker.lower()}.us&i=d"
         r = requests.get(url, timeout=10)
         r.raise_for_status()
-        lineas = [l for l in r.text.strip().split("\n") if l]
-        if len(lineas) < 3:
-            return None
-        ultima = lineas[-1].split(",")
-        penultima = lineas[-2].split(",")
-        precio_actual = float(ultima[4])   # columna Close
-        cierre_anterior = float(penultima[4])
-        return precio_actual, cierre_anterior
+        return _parse_stooq_csv(r.text)
     except Exception:
         return None
 

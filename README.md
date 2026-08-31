@@ -40,7 +40,7 @@ Usa la API pública de Wallbit + Claude (Anthropic) como cerebro + fuentes de da
 - Screener de tesis: describís una tesis en lenguaje natural ("empresas de defensa con contratos nuevos") y el agente busca candidatos con Brave Search + los valida con datos reales de yfinance (revenue growth, márgenes, deuda, P/E)
 - Lectura de páginas completas: cuando un snippet de noticia no alcanza, el agente entra a la URL real (web oficial de la empresa, prensa o foros especializados del país/rubro donde opera esa empresa — no importa si es Argentina, EEUU, Australia o Europa) y extrae el texto completo del artículo. Si el sitio renderiza el contenido con JavaScript (muy común en diarios modernos), cae automáticamente a un lector con motor de render (Jina Reader, gratis) en vez de traer una página vacía
 - Búsqueda global de noticias: motor propio (Google News RSS + GDELT) que busca en prensa de cualquier país del mundo filtrando por código ISO de país e idioma, no limitado a medios en inglés como el buscador general
-- Sentimiento social: consulta StockTwits (comunidad 100% financiera) para ver el % de mensajes Bullish/Bearish sobre un ticker. Evaluamos usar X/Twitter y lo descartamos — desde 2026 cobra por post leído y tiene mucho más ruido (bots, pump groups) sin ninguna etiqueta de sentimiento
+- Sentimiento social: consulta StockTwits (comunidad 100% financiera) para ver el % de mensajes Bullish/Bearish sobre un ticker, y Reddit (r/wallstreetbets, r/stocks, r/investing, r/StockMarket) para discusión con más contexto, rankeada por upvotes. Evaluamos usar X/Twitter y lo descartamos — desde 2026 cobra por post leído y tiene mucho más ruido (bots, pump groups) sin ningún filtro de calidad
 - Diario de trading: registrá decisiones y detectá sesgos cognitivos
 - Metas financieras con seguimiento de progreso
 - Presupuesto mensual por categorías
@@ -85,6 +85,8 @@ cd agente-wallbit
 | `TELEGRAM_BOT_TOKEN` | Telegram → [@BotFather](https://t.me/BotFather) → /newbot | Gratis |
 | `BRAVE_API_KEY` | [api.search.brave.com](https://api.search.brave.com) | Gratis hasta 2000 búsquedas/mes |
 | `TELEGRAM_USER_ID` | Telegram → [@userinfobot](https://t.me/userinfobot) → /start | Gratis |
+| `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` (opcional) | Pedir acceso a la Data API [acá](https://support.reddithelp.com/hc/en-us/requests/new?ticket_form_id=14868593862164) (uso no comercial) y luego crear app tipo "script" en [reddit.com/prefs/apps](https://www.reddit.com/prefs/apps) | Gratis, 100 QPM |
+| `REDDIT_USERNAME` (opcional) | Tu usuario de Reddit, sin "u/". Reddit exige incluirlo en el User-Agent | — |
 
 ### 3. Configurar
 
@@ -205,15 +207,18 @@ Escribile a tu bot en Telegram en lenguaje natural:
 
 ```
 agente-wallbit/
-├── agente.py          # Motor principal — Anthropic Tool Use (23 herramientas)
+├── agente.py          # Motor principal — Anthropic Tool Use (30 herramientas)
 ├── wallbit_client.py  # Cliente Wallbit MCP + parser de portfolio
-├── market_data.py     # Yahoo Finance, FRED, SEC EDGAR, Earnings Calendar
+├── market_data.py     # Yahoo Finance, FRED, SEC EDGAR, Earnings Calendar, Stooq
 ├── database.py        # SQLite — watchlist, alertas, metas, historial, diario
 ├── brave_client.py    # Brave Search con caché 30min
 ├── web_reader.py      # Lector de páginas web completas (empresas, diarios locales)
 ├── global_search.py   # Motor de búsqueda global de noticias (Google News RSS + GDELT)
 ├── social_sentiment.py # Sentimiento social vía StockTwits (Bullish/Bearish)
+├── reddit_client.py    # Sentimiento/discusión vía Reddit (r/wallstreetbets, r/stocks...)
 ├── telegram_bot.py    # Bot de Telegram + jobs automáticos
+├── tests/             # Suite de tests (corre sin red, ver sección Tests)
+├── requirements.txt   # Dependencias de Python
 ├── instalar.sh        # Script de instalación
 └── config.env.example # Template de configuración
 ```
@@ -235,8 +240,19 @@ El módulo **Bull vs Bear** hace dos llamadas separadas a Claude con instruccion
 | Brave Search | Noticias financieras en tiempo real | Gratis hasta 2000 búsquedas/mes |
 | Google News RSS | Prensa local por país/idioma (cualquier mercado del mundo) | Gratis, sin API key |
 | GDELT Project | Índice global de noticias de prácticamente todos los países | Gratis, sin API key |
+| StockTwits | Sentimiento Bullish/Bearish etiquetado por la comunidad | Gratis, sin API key |
+| Reddit | Discusión en subreddits financieros, rankeada por upvotes | Gratis, requiere app propia (100 req/min) |
+| Stooq | Precio de respaldo, independiente de Yahoo | Gratis, sin API key |
 
 ---
+
+## Tests
+
+El proyecto tiene una suite de tests que corre sin red (no depende de que Wallbit, Yahoo Finance o ninguna API externa esté online — solo prueba la lógica pura: parsers, cálculos de alertas, etc):
+
+```bash
+python3 -m pytest tests/ -v
+```
 
 ## Jobs automáticos
 

@@ -1,0 +1,11 @@
+anthropic>=0.40.0
+python-telegram-bot>=21.0
+python-dotenv>=1.0.0
+requests>=2.31.0
+yfinance>=0.2.40
+pandas>=2.0.0
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
+
+# Solo para desarrollo (correr tests/), no hace falta para el bot en producción
+pytest>=8.0.0
