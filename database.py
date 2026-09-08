@@ -21,6 +21,8 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS bitacora (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, tipo TEXT, descripcion TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS decision_log (id INTEGER PRIMARY KEY AUTOINCREMENT, fecha TEXT, ticker TEXT, precio_momento REAL, veredicto TEXT, razonamiento TEXT, resultado TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS alertas_pct (id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT, umbral_pct REAL, direccion TEXT, referencia TEXT, activa INTEGER DEFAULT 1, fecha_creacion TEXT, fecha_disparada TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS campanas_research (id INTEGER PRIMARY KEY AUTOINCREMENT, tickers TEXT, fecha_inicio TEXT, dias INTEGER, activa INTEGER DEFAULT 1, ultima_corrida TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS research_hallazgos (id INTEGER PRIMARY KEY AUTOINCREMENT, campana_id INTEGER, ticker TEXT, fecha TEXT, tipo TEXT, titulo TEXT, url TEXT, fuente TEXT, clave_dedupe TEXT)''')
 
     # Migración: agregar avg_cost_manual si la tabla ya existía de antes sin esa columna
     try:
@@ -276,6 +278,133 @@ def registrar_bitacora(tipo, descripcion):
               (datetime.now().isoformat(), tipo, descripcion))
     conn.commit()
     conn.close()
+
+# ─── Campañas de research (seguimiento diario de tickers por N días) ──────────
+
+def crear_campana_research(tickers, dias=30):
+    """tickers: lista de strings. Devuelve el id de la campaña creada."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    tickers_str = ",".join(t.strip().upper() for t in tickers if t.strip())
+    c.execute(
+        "INSERT INTO campanas_research (tickers, fecha_inicio, dias, activa) VALUES (?, ?, ?, 1)",
+        (tickers_str, datetime.now().isoformat(), dias)
+    )
+    campana_id = c.lastrowid
+    conn.commit()
+    conn.close()
+    return campana_id
+
+def obtener_campanas_activas():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id, tickers, fecha_inicio, dias, ultima_corrida FROM campanas_research WHERE activa = 1")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def marcar_corrida_campana(campana_id, fecha_iso):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE campanas_research SET ultima_corrida = ? WHERE id = ?", (fecha_iso, campana_id))
+    conn.commit()
+    conn.close()
+
+def desactivar_campana_research(campana_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE campanas_research SET activa = 0 WHERE id = ?", (campana_id,))
+    eliminado = conn.total_changes > 0
+    conn.commit()
+    conn.close()
+    return eliminado
+
+def existe_hallazgo(campana_id, ticker, tipo, clave_dedupe):
+    """
+    Para tipo='noticia'/'filing' clave_dedupe es la URL (no repetir el mismo
+    artículo). Para tipo='sentimiento' clave_dedupe es "fuente:fecha" (una
+    sola foto del pulso social por día y por fuente, no por URL — la URL de
+    StockTwits/ApeWisdom es siempre la misma página del ticker).
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "SELECT 1 FROM research_hallazgos WHERE campana_id=? AND ticker=? AND tipo=? AND clave_dedupe=? LIMIT 1",
+        (campana_id, ticker.upper(), tipo, clave_dedupe)
+    )
+    existe = c.fetchone() is not None
+    conn.close()
+    return existe
+
+def agregar_hallazgo(campana_id, ticker, tipo, titulo, url, fuente, clave_dedupe):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO research_hallazgos (campana_id, ticker, fecha, tipo, titulo, url, fuente, clave_dedupe) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (campana_id, ticker.upper(), datetime.now().isoformat(), tipo, titulo, url, fuente, clave_dedupe)
+    )
+    conn.commit()
+    conn.close()
+
+def obtener_hallazgos_campana(campana_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "SELECT ticker, fecha, tipo, titulo, url, fuente FROM research_hallazgos WHERE campana_id = ? ORDER BY ticker ASC, fecha DESC",
+        (campana_id,)
+    )
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+
+@tool(
+    "manage_research_campaign",
+    "Campaña de research automático: sigue una lista de tickers UNA VEZ POR DÍA durante N días y junta hallazgos (noticias, filings SEC, pulso de sentimiento social) en un HTML local que se actualiza solo — no resume nada, solo junta links sin repetir lo ya visto. Usar 'crear' cuando pidan algo como 'seguime estos tickers por 30 días' o 'quiero que levantes info de X e Y todos los días'. 'listar' muestra campañas activas y cuántos hallazgos llevan acumulados. 'detener' corta una campaña antes de que termine sola.",
+    {
+        "type": "object",
+        "properties": {
+            "accion": {"type": "string", "enum": ["crear", "listar", "detener"]},
+            "tickers": {"type": "array", "items": {"type": "string"}, "description": "Tickers a trackear (accion=crear)"},
+            "dias": {"type": "integer", "description": "Duración en días, default 30 (accion=crear)"},
+            "campana_id": {"type": "integer", "description": "Id de la campaña (accion=detener)"}
+        },
+        "required": ["accion"]
+    }
+)
+def _tool_manage_research_campaign(inputs: dict):
+    accion = inputs["accion"]
+    if accion == "crear":
+        tickers = [t for t in (inputs.get("tickers") or []) if t]
+        if not tickers:
+            return "Error: se necesita al menos un ticker para crear la campaña"
+        dias = inputs.get("dias", 30)
+        campana_id = crear_campana_research(tickers, dias)
+        tickers_str = ", ".join(t.upper() for t in tickers)
+        return {"ok": True, "data": f"✅ Campaña #{campana_id} creada: sigo {tickers_str} durante {dias} días. Reviso novedades una vez por día y las sumo a un HTML local — te aviso cuando encuentre algo nuevo."}
+    elif accion == "listar":
+        campanas = obtener_campanas_activas()
+        if not campanas:
+            return {"ok": True, "data": "No hay campañas de research activas"}
+        data = []
+        for campana_id, tickers_str, fecha_inicio, dias, ultima_corrida in campanas:
+            hallazgos = obtener_hallazgos_campana(campana_id)
+            dias_transcurridos = (datetime.now() - datetime.fromisoformat(fecha_inicio)).days
+            data.append({
+                "id": campana_id, "tickers": tickers_str,
+                "dias_transcurridos": dias_transcurridos, "dias_totales": dias,
+                "hallazgos_acumulados": len(hallazgos),
+                "ultima_corrida": ultima_corrida or "todavía no corrió"
+            })
+        return {"ok": True, "data": data}
+    elif accion == "detener":
+        campana_id = inputs.get("campana_id")
+        if campana_id is None:
+            return "Error: se necesita campana_id para detener"
+        ok = desactivar_campana_research(campana_id)
+        return {"ok": True, "data": f"{'✅ Campaña #' + str(campana_id) + ' detenida' if ok else '⚠️ No se encontró esa campaña'}"}
+    else:
+        return {"ok": False, "error": f"Acción desconocida para manage_research_campaign: {accion}"}
 
 # ─── Tools (Anthropic Tool Use) ────────────────────────────────────────────────
 # Todo lo que gestiona estado local (watchlist, alertas, presupuesto, metas,

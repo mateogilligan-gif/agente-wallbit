@@ -6,6 +6,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 from dotenv import load_dotenv
 from database import init_db
 import agente
+import research_campaigns
 
 load_dotenv("config.env")
 
@@ -157,6 +158,25 @@ async def earnings_diarios(context: ContextTypes.DEFAULT_TYPE):
         await _enviar_texto_largo_bot(context.bot, AUTHORIZED_USER_ID, texto)
 
 
+async def research_diario(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Corre las campañas de research activas una vez por día, a las 7am
+    Argentina (UTC-3 = 10:00 UTC) — antes del chequeo de earnings y de la
+    apertura de mercado, para tener las novedades listas a primera hora.
+    Solo manda un mensaje corto con el conteo de novedades; el detalle
+    (los links) queda en el HTML local, que se actualiza solo.
+    """
+    resumen = research_campaigns.ejecutar_campanas_diarias()
+    if not resumen or not AUTHORIZED_USER_ID:
+        return
+    lineas = []
+    for r in resumen:
+        estado = "✅ campaña finalizada" if r["finalizada"] else f"día {r['dias_transcurridos']}/{r['dias_totales']}"
+        lineas.append(f"🔎 Campaña #{r['campana_id']} [{r['tickers']}] ({estado}): {r['nuevos']} novedades nuevas\n{r['archivo_html']}")
+    texto = "*Research diario:*\n\n" + "\n\n".join(lineas)
+    await _enviar_texto_largo_bot(context.bot, AUTHORIZED_USER_ID, texto, parse_mode="Markdown")
+
+
 def main():
     init_db()
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
@@ -176,6 +196,9 @@ def main():
 
     # Earnings diarios a las 8:00am Argentina (11:00 UTC)
     app.job_queue.run_daily(earnings_diarios, time=dtime(hour=11, minute=0))
+
+    # Research de campañas activas a las 7:00am Argentina (10:00 UTC)
+    app.job_queue.run_daily(research_diario, time=dtime(hour=10, minute=0))
 
     logger.info("🤖 Agente Wallbit iniciado vía Telegram.")
     app.run_polling()

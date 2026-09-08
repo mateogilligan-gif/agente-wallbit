@@ -215,18 +215,23 @@ agente-wallbit/
 ├── brave_client.py     # Brave Search con caché 30min (1 tool)
 ├── web_reader.py       # Lector de páginas web completas (1 tool)
 ├── global_search.py    # Motor de búsqueda global de noticias (1 tool)
-├── social_sentiment.py # Sentimiento social vía StockTwits (1 tool)
-├── reddit_client.py    # Sentimiento/discusión vía Reddit (1 tool)
-├── telegram_bot.py     # Bot de Telegram + jobs automáticos
-├── tests/              # Suite de tests (corre sin red, ver sección Tests)
-├── requirements.txt    # Dependencias de Python
-├── instalar.sh         # Script de instalación
-└── config.env.example  # Template de configuración
+├── social_sentiment.py  # Sentimiento social vía StockTwits (1 tool)
+├── reddit_client.py     # Discusión vía Reddit — requiere credenciales propias (1 tool)
+├── apewisdom_client.py  # Volumen de menciones en Reddit, sin credenciales (1 tool)
+├── research_campaigns.py # Campañas de research diario por ticker (ver sección propia)
+├── telegram_bot.py      # Bot de Telegram + jobs automáticos
+├── tests/               # Suite de tests (corre sin red, ver sección Tests)
+├── requirements.txt     # Dependencias de Python
+├── instalar.sh          # Script de instalación
+└── config.env.example   # Template de configuración
 ```
 
 Cada módulo de dominio registra sus propias tools con `@tool(...)` (de
-`tool_registry.py`) junto a la lógica que ya tenía — 32 tools en total,
+`tool_registry.py`) junto a la lógica que ya tenía — 34 tools en total,
 repartidas por dominio en vez de vivir todas juntas en `agente.py`.
+`research_campaigns.py` es la excepción: no registra ninguna tool propia
+(la tool `manage_research_campaign` vive en `database.py`, que es quien
+tiene el estado) — solo orquesta el job diario que llama `telegram_bot.py`.
 
 El bot usa el patrón **Anthropic Tool Use**: Claude decide qué herramientas llamar, Python las ejecuta con datos reales, y Claude interpreta los resultados. Cada respuesta está basada en datos reales de tu cuenta y del mercado, no en estimaciones.
 
@@ -246,7 +251,8 @@ El módulo **Bull vs Bear** hace dos llamadas separadas a Claude con instruccion
 | Google News RSS | Prensa local por país/idioma (cualquier mercado del mundo) | Gratis, sin API key |
 | GDELT Project | Índice global de noticias de prácticamente todos los países | Gratis, sin API key |
 | StockTwits | Sentimiento Bullish/Bearish etiquetado por la comunidad | Gratis, sin API key |
-| Reddit | Discusión en subreddits financieros, rankeada por upvotes | Gratis, requiere app propia (100 req/min) |
+| Reddit | Discusión en subreddits financieros, rankeada por upvotes | Gratis, requiere app propia — Reddit rechazó nuestro pedido de acceso, tool queda inerte salvo que se consiga más adelante |
+| ApeWisdom | Ranking/volumen de menciones en Reddit, sin credenciales | Gratis, sin API key |
 | Stooq | Precio de respaldo, independiente de Yahoo | Gratis, sin API key |
 
 ---
@@ -259,11 +265,28 @@ El proyecto tiene una suite de tests que corre sin red (no depende de que Wallbi
 python3 -m pytest tests/ -v
 ```
 
+## Campañas de research diario
+
+Le podés pedir al bot algo como *"seguime AAPL y TSLA por 30 días"* y arranca
+una campaña: una vez por día (7am Argentina, antes de la apertura) busca
+novedades — noticias (Brave + Google News/GDELT), filings 8-K de SEC EDGAR, y
+pulso de sentimiento social (StockTwits + ApeWisdom) — y las va sumando a un
+HTML local en `~/agente-wallbit/research/campana_<id>.html`, sin repetir lo ya
+visto. No resume nada: para noticias y filings guarda el link real; para el
+pulso social (que no tiene un artículo al que linkear) guarda una foto
+numérica del día. El bot te avisa por Telegram cuántas novedades encontró
+cada día — el detalle queda en el HTML. La campaña se corta sola al cumplirse
+los días pedidos, o antes si le pedís *"detené la campaña #1"*.
+
+Comandos vía chat: *"seguime estos tickers por N días"* (crear), *"cómo van
+mis campañas de research"* (listar), *"detené la campaña #X"* (detener).
+
 ## Jobs automáticos
 
-El bot corre dos tareas en segundo plano sin que tengas que pedirlas:
+El bot corre tres tareas en segundo plano sin que tengas que pedirlas:
 
 - **Cada 30 minutos**: verifica alertas de precio de tu watchlist y notifica si alguna se disparó
+- **Todos los días a las 7am (Argentina)**: corre las campañas de research activas y avisa cuántas novedades encontró
 - **Todos los días a las 8am (Argentina)**: revisa si alguna empresa de tu portfolio reporta earnings esa semana y te avisa
 
 ---

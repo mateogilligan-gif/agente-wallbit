@@ -20,7 +20,8 @@ import market_data
 import web_reader        # noqa: F401 — registra la tool leer_pagina_web
 import global_search     # noqa: F401 — registra la tool busqueda_global
 import social_sentiment  # noqa: F401 — registra la tool sentimiento_social
-import reddit_client     # noqa: F401 — registra la tool reddit_sentiment
+import reddit_client     # noqa: F401 — registra la tool reddit_sentiment (Reddit rechazó el acceso, ver apewisdom_client)
+import apewisdom_client  # noqa: F401 — registra la tool reddit_mentions_trending
 
 
 # ─── Bull vs Bear ──────────────────────────────────────────────────────────
@@ -177,9 +178,9 @@ Usá brave_search + yf_info. El foco es entender el negocio, no recitar balances
 
 PROMPT_MODULES = {
     "sentimiento_social": {
-        "keywords": ["reddit", "wallstreetbets", "hype", "sentimiento", "qué dice la gente", "que dice la gente", "stocktwits", "bullish", "bearish"],
-        "texto": """SENTIMIENTO SOCIAL — solo si el usuario lo pide explícitamente ("qué dice la gente", "hype", "sentimiento del mercado", "qué dice reddit"):
-Usar sentimiento_social (StockTwits) para el pulso rápido Bullish/Bearish, y reddit_sentiment cuando quieran más contexto o discusión (menciona el score/upvotes de cada post para que el usuario juzgue qué tan respaldado está). Aclarar SIEMPRE que es sentimiento de retail/comunidad, no un indicador fundamental — sirve para detectar euforia o pánico excesivo, no para tomar la decisión de inversión en sí."""
+        "keywords": ["reddit", "wallstreetbets", "hype", "sentimiento", "qué dice la gente", "que dice la gente", "stocktwits", "bullish", "bearish", "de moda", "apewisdom"],
+        "texto": """SENTIMIENTO SOCIAL — solo si el usuario lo pide explícitamente ("qué dice la gente", "hype", "sentimiento del mercado", "qué dice reddit", "está de moda"):
+Usar sentimiento_social (StockTwits) para el pulso rápido Bullish/Bearish. Para saber si un ticker está de moda en Reddit ahora (ranking/volumen de menciones, subiendo o bajando vs ayer) usar reddit_mentions_trending (ApeWisdom, sin configuración necesaria). reddit_sentiment (texto real de los posts) requiere credenciales propias de Reddit — Reddit rechazó ese pedido de acceso, así que hoy esa tool no va a funcionar salvo que Mateo consiga acceso más adelante. Aclarar SIEMPRE que esto es sentimiento de retail/comunidad, no un indicador fundamental — sirve para detectar euforia o pánico excesivo, no para tomar la decisión de inversión en sí."""
     },
     "filings_riesgo": {
         "keywords": ["10-k", "10-q", "8-k", "filing", "filings", "riesgo", "riesgos", "supply chain", "cadena de suministro", "concentración de clientes", "concentracion de clientes", "litigio"],
@@ -235,6 +236,11 @@ Usar bull_bear_analysis. Dos llamadas separadas, argumentos opuestos, veredicto 
 3. Prensa local/global: usar busqueda_global con el código ISO de país e idioma correspondiente (ej empresa australiana → pais="AU" idioma="en", empresa alemana → pais="DE" idioma="de", empresa brasilera → pais="BR" idioma="pt"). Esto trae medios reales de ese mercado (Google News + GDELT), no solo lo que indexa brave_search en inglés.
 4. Una vez identificada la URL relevante (medio local, foro especializado, o sitio oficial), usar leer_pagina_web para sacar el texto completo — no te quedes solo con el título.
 5. Máximo 2-3 leer_pagina_web por consulta para no gastar tokens de más. Priorizar la fuente más reciente y relevante, en el idioma que sea (traducir el hallazgo al responder)."""
+    },
+    "campana_research": {
+        "keywords": ["seguime estos", "seguime esta", "trackeame", "campaña de research", "todos los días levantame", "todos los dias levantame", "por 30 dias", "por 30 días", "durante el próximo mes", "durante el proximo mes", "por un mes"],
+        "texto": """CAMPAÑA DE RESEARCH — cuando pidan seguimiento diario de una lista de tickers por un período (ej "seguime estos tickers por 30 días", "quiero que levantes info de X e Y todos los días"):
+Usar manage_research_campaign(crear, tickers=[...], dias=N, default 30). Aclarar que el bot revisa novedades UNA VEZ POR DÍA (no en el momento) y las va sumando a un HTML local que se actualiza solo — no resume nada, solo junta los links de lo que encuentre (noticias, filings SEC, pulso de sentimiento social) sin repetir lo ya visto. Usar manage_research_campaign(listar) para consultar el progreso de campañas activas, y (detener) para cortar una antes de tiempo."""
     },
 }
 
