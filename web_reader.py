@@ -17,6 +17,8 @@ devuelve el contenido ya limpio. No requiere instalar un navegador headless.
 """
 import requests
 
+from tool_registry import tool
+
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
@@ -135,3 +137,21 @@ def fetch_article_text(url: str, max_chars: int = 4000) -> dict:
         return via_jina
 
     return {"ok": False, "error": f"No se pudo leer la página ni directo ni con Jina Reader. Error directo: {directo.get('error')}"}
+
+
+# ─── Tool (Anthropic Tool Use) ──────────────────────────────────────────────────
+
+@tool(
+    "leer_pagina_web",
+    "Entra a una URL específica y devuelve el texto completo de la página (no solo título/resumen). Usar cuando: (1) brave_search o busqueda_global devolvieron un snippet insuficiente y hace falta más detalle, (2) el usuario pide explícitamente meterse en la web oficial de una empresa (sección 'News'/'Newsroom'/'Investor Relations'), o (3) hay que leer un diario o foro específico de cualquier país. Internamente prueba lectura directa primero y si el sitio renderiza con JavaScript (contenido vacío), cae automáticamente a un lector con motor de render — no hace falta pedirlo. Máximo 2-3 llamadas por consulta para no gastar tokens de más.",
+    {
+        "type": "object",
+        "properties": {
+            "url": {"type": "string", "description": "URL completa a leer"},
+            "max_chars": {"type": "integer", "description": "Límite de caracteres a extraer, default 4000"}
+        },
+        "required": ["url"]
+    }
+)
+def _tool_leer_pagina_web(inputs: dict):
+    return fetch_article_text(inputs["url"], inputs.get("max_chars", 4000))

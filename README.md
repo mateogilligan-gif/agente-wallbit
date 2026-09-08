@@ -207,21 +207,26 @@ Escribile a tu bot en Telegram en lenguaje natural:
 
 ```
 agente-wallbit/
-├── agente.py          # Motor principal — Anthropic Tool Use (30 herramientas)
-├── wallbit_client.py  # Cliente Wallbit MCP + parser de portfolio
-├── market_data.py     # Yahoo Finance, FRED, SEC EDGAR, Earnings Calendar, Stooq
-├── database.py        # SQLite — watchlist, alertas, metas, historial, diario
-├── brave_client.py    # Brave Search con caché 30min
-├── web_reader.py      # Lector de páginas web completas (empresas, diarios locales)
-├── global_search.py   # Motor de búsqueda global de noticias (Google News RSS + GDELT)
-├── social_sentiment.py # Sentimiento social vía StockTwits (Bullish/Bearish)
-├── reddit_client.py    # Sentimiento/discusión vía Reddit (r/wallstreetbets, r/stocks...)
-├── telegram_bot.py    # Bot de Telegram + jobs automáticos
-├── tests/             # Suite de tests (corre sin red, ver sección Tests)
-├── requirements.txt   # Dependencias de Python
-├── instalar.sh        # Script de instalación
-└── config.env.example # Template de configuración
+├── tool_registry.py    # Registro compartido de tools (decorador @tool, sin dependencias)
+├── agente.py           # Orquesta el chat: prompt modular, loop de Tool Use, bull/bear
+├── wallbit_client.py   # Cliente Wallbit MCP + parser de portfolio (6 tools)
+├── market_data.py      # Yahoo Finance, FRED, SEC EDGAR, Earnings Calendar, Stooq (12 tools)
+├── database.py         # SQLite — watchlist, alertas, metas, historial, diario (8 tools)
+├── brave_client.py     # Brave Search con caché 30min (1 tool)
+├── web_reader.py       # Lector de páginas web completas (1 tool)
+├── global_search.py    # Motor de búsqueda global de noticias (1 tool)
+├── social_sentiment.py # Sentimiento social vía StockTwits (1 tool)
+├── reddit_client.py    # Sentimiento/discusión vía Reddit (1 tool)
+├── telegram_bot.py     # Bot de Telegram + jobs automáticos
+├── tests/              # Suite de tests (corre sin red, ver sección Tests)
+├── requirements.txt    # Dependencias de Python
+├── instalar.sh         # Script de instalación
+└── config.env.example  # Template de configuración
 ```
+
+Cada módulo de dominio registra sus propias tools con `@tool(...)` (de
+`tool_registry.py`) junto a la lógica que ya tenía — 32 tools en total,
+repartidas por dominio en vez de vivir todas juntas en `agente.py`.
 
 El bot usa el patrón **Anthropic Tool Use**: Claude decide qué herramientas llamar, Python las ejecuta con datos reales, y Claude interpreta los resultados. Cada respuesta está basada en datos reales de tu cuenta y del mercado, no en estimaciones.
 

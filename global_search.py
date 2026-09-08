@@ -17,6 +17,8 @@ import requests
 import urllib.parse
 from datetime import datetime
 
+from tool_registry import tool
+
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
@@ -145,3 +147,28 @@ def busqueda_global(query: str, pais: str = None, idioma: str = None, count: int
     resultado_final = {"ok": True, "data": resultados[:count]}
     _cache[key] = {"data": resultado_final, "timestamp": datetime.now()}
     return resultado_final
+
+
+# ─── Tool (Anthropic Tool Use) ──────────────────────────────────────────────────
+
+@tool(
+    "busqueda_global",
+    "Motor de búsqueda de noticias GLOBAL (Google News + GDELT), cubre prensa de cualquier país del mundo, no solo medios en inglés/EEUU como brave_search. Usar cuando se necesite cobertura de prensa local de un país específico (empresa australiana, europea, asiática, latinoamericana) o cuando brave_search no traiga resultados relevantes de ese mercado. Pasar el código de país ISO (AU, DE, JP, AR, BR, etc) e idioma (en, de, ja, es, etc) según de dónde sea la empresa. Devuelve título, URL, fuente y país — después usar leer_pagina_web sobre la URL más relevante para el texto completo.",
+    {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Términos de búsqueda"},
+            "pais": {"type": "string", "description": "Código ISO 2 letras del país, ej AU, DE, JP, AR, BR"},
+            "idioma": {"type": "string", "description": "Código ISO 2 letras del idioma, ej en, de, ja, es"},
+            "count": {"type": "integer"}
+        },
+        "required": ["query"]
+    }
+)
+def _tool_busqueda_global(inputs: dict):
+    return busqueda_global(
+        query=inputs["query"],
+        pais=inputs.get("pais"),
+        idioma=inputs.get("idioma"),
+        count=inputs.get("count", 10)
+    )

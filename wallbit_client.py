@@ -4,6 +4,8 @@ import json
 import re
 from typing import Optional
 
+from tool_registry import tool
+
 # Claves que NUNCA son un ticker, aunque aparezcan como clave de nivel raíz
 # en la respuesta de Wallbit (evita que el parser las confunda con posiciones).
 CLAVES_NO_TICKER = {
@@ -320,3 +322,65 @@ def get_portfolio_summary() -> dict:
     stocks = get_stocks_balance()
     summary = format_portfolio_summary(checking, stocks)
     return {"ok": True, "data": summary}
+
+
+# ─── Tools (Anthropic Tool Use) ────────────────────────────────────────────────
+
+@tool(
+    "get_portfolio_summary",
+    "Portfolio completo: saldo corriente + todas las posiciones con ticker, cantidad de acciones, precio promedio, valor actual y P&L. Usar este en vez de get_checking_balance + get_stocks_balance por separado.",
+    {"type": "object", "properties": {}, "required": []}
+)
+def _tool_get_portfolio_summary(inputs: dict):
+    return get_portfolio_summary()
+
+
+@tool(
+    "get_checking_balance",
+    "Solo saldo cuenta corriente Wallbit (cash disponible).",
+    {"type": "object", "properties": {}, "required": []}
+)
+def _tool_get_checking_balance(inputs: dict):
+    return get_checking_balance()
+
+
+@tool(
+    "get_stocks_balance",
+    "Solo posiciones de inversión crudas. Preferir get_portfolio_summary.",
+    {"type": "object", "properties": {}, "required": []}
+)
+def _tool_get_stocks_balance(inputs: dict):
+    return get_stocks_balance()
+
+
+@tool(
+    "list_transactions",
+    "Transacciones recientes Wallbit.",
+    {"type": "object", "properties": {"limit": {"type": "integer"}}, "required": []}
+)
+def _tool_list_transactions(inputs: dict):
+    return list_transactions(inputs.get("limit", 50))
+
+
+@tool(
+    "get_asset",
+    "Precio actual de un ticker.",
+    {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]}
+)
+def _tool_get_asset(inputs: dict):
+    return get_asset(inputs["ticker"])
+
+
+@tool(
+    "create_trade",
+    "Ejecuta orden. SOLO con SÍ/CONFIRMO explícito.",
+    {"type": "object", "properties": {"ticker": {"type": "string"}, "side": {"type": "string", "enum": ["buy", "sell"]}, "amount": {"type": "number"}, "order_type": {"type": "string", "enum": ["market", "limit"]}, "price": {"type": "number"}}, "required": ["ticker", "side", "amount", "order_type"]}
+)
+def _tool_create_trade(inputs: dict):
+    return create_trade(
+        ticker=inputs["ticker"],
+        side=inputs["side"],
+        amount=inputs["amount"],
+        order_type=inputs.get("order_type", "market"),
+        price=inputs.get("price")
+    )

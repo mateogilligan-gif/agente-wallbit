@@ -2,641 +2,33 @@ import os
 import json
 import anthropic
 from datetime import datetime
+
+from tool_registry import TOOL_REGISTRY, tool
+
+# database.py y los módulos de dominio de abajo registran sus propias tools
+# con @tool(...) al importarse (efecto de lado, ver tool_registry.py). Acá se
+# importan también las funciones puntuales que agente.py sigue usando directo
+# (historial de chat, watchlist/alertas para los jobs periódicos, etc).
 from database import (
-    guardar_mensaje, obtener_historial, guardar_config, obtener_config,
+    guardar_mensaje, obtener_historial, obtener_config,
     registrar_bitacora, obtener_watchlist, obtener_alertas_activas,
-    obtener_diario_trading, init_db,
-    agregar_watchlist, eliminar_watchlist,
-    crear_alerta, desactivar_alerta,
-    crear_presupuesto, obtener_presupuestos, actualizar_gasto_presupuesto,
-    crear_meta, obtener_metas, actualizar_progreso_meta,
-    guardar_trade_diario,
-    guardar_decision, obtener_decisiones_ticker, actualizar_resultado_decision,
-    crear_alerta_pct, obtener_alertas_pct_activas, desactivar_alerta_pct
+    init_db, obtener_alertas_pct_activas,
 )
 import wallbit_client
 import brave_client
 import market_data
-import web_reader
-import global_search
-import social_sentiment
-import reddit_client
+import web_reader        # noqa: F401 — registra la tool leer_pagina_web
+import global_search     # noqa: F401 — registra la tool busqueda_global
+import social_sentiment  # noqa: F401 — registra la tool sentimiento_social
+import reddit_client     # noqa: F401 — registra la tool reddit_sentiment
 
-# ─── Registro de herramientas para Anthropic Tool Use ─────────────────────────
+
+# ─── Bull vs Bear ──────────────────────────────────────────────────────────
 #
-# Cada tool se registra UNA vez con @tool(...): ahí conviven su schema (lo que
-# ve Claude) y la función que la resuelve. TOOLS (la lista que se manda a la
-# API) y el dispatch de ejecutar_herramienta se arman solos a partir de este
-# registro — antes eran dos lugares separados (una lista TOOLS de 220 líneas
-# + una cadena de 31 elif) que había que mantener sincronizados a mano.
-
-TOOL_REGISTRY = {}
-
-
-def tool(name: str, description: str, input_schema: dict):
-    """Decorador: registra el schema de una tool junto con la función que la ejecuta."""
-    def decorador(func):
-        TOOL_REGISTRY[name] = {
-            "schema": {"name": name, "description": description, "input_schema": input_schema},
-            "handler": func,
-        }
-        return func
-    return decorador
-
-
-# ── Wallbit API ──
-
-@tool(
-    "get_portfolio_summary",
-    "Portfolio completo: saldo corriente + todas las posiciones con ticker, cantidad de acciones, precio promedio, valor actual y P&L. Usar este en vez de get_checking_balance + get_stocks_balance por separado.",
-    {"type": "object", "properties": {}, "required": []}
-)
-def _tool_get_portfolio_summary(inputs: dict):
-    return wallbit_client.get_portfolio_summary()
-
-
-@tool(
-    "get_checking_balance",
-    "Solo saldo cuenta corriente Wallbit (cash disponible).",
-    {"type": "object", "properties": {}, "required": []}
-)
-def _tool_get_checking_balance(inputs: dict):
-    return wallbit_client.get_checking_balance()
-
-
-@tool(
-    "get_stocks_balance",
-    "Solo posiciones de inversión crudas. Preferir get_portfolio_summary.",
-    {"type": "object", "properties": {}, "required": []}
-)
-def _tool_get_stocks_balance(inputs: dict):
-    return wallbit_client.get_stocks_balance()
-
-
-@tool(
-    "list_transactions",
-    "Transacciones recientes Wallbit.",
-    {"type": "object", "properties": {"limit": {"type": "integer"}}, "required": []}
-)
-def _tool_list_transactions(inputs: dict):
-    limit = inputs.get("limit", 50)
-    return wallbit_client.list_transactions(limit)
-
-
-@tool(
-    "get_asset",
-    "Precio actual de un ticker.",
-    {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]}
-)
-def _tool_get_asset(inputs: dict):
-    return wallbit_client.get_asset(inputs["ticker"])
-
-
-@tool(
-    "create_trade",
-    "Ejecuta orden. SOLO con SÍ/CONFIRMO explícito.",
-    {"type": "object", "properties": {"ticker": {"type": "string"}, "side": {"type": "string", "enum": ["buy", "sell"]}, "amount": {"type": "number"}, "order_type": {"type": "string", "enum": ["market", "limit"]}, "price": {"type": "number"}}, "required": ["ticker", "side", "amount", "order_type"]}
-)
-def _tool_create_trade(inputs: dict):
-    return wallbit_client.create_trade(
-        ticker=inputs["ticker"],
-        side=inputs["side"],
-        amount=inputs["amount"],
-        order_type=inputs.get("order_type", "market"),
-        price=inputs.get("price")
-    )
-
-
-# ── Búsqueda web ──
-
-@tool(
-    "brave_search",
-    "Busca noticias financieras en tiempo real.",
-    {"type": "object", "properties": {"query": {"type": "string"}, "tipo": {"type": "string", "enum": ["web", "news"]}}, "required": ["query"]}
-)
-def _tool_brave_search(inputs: dict):
-    tipo = inputs.get("tipo", "news")
-    query = inputs["query"]
-    if tipo == "news":
-        items = brave_client.search_news(query, count=5)
-    else:
-        items = brave_client.search_web(query, count=5)
-    if items:
-        return {"ok": True, "data": items}
-    else:
-        return {"ok": False, "error": "Sin resultados"}
-
-
-# ── Watchlist ──
-
-@tool(
-    "manage_watchlist",
-    "Watchlist: agregar/eliminar/listar tickers.",
-    {"type": "object", "properties": {"accion": {"type": "string", "enum": ["agregar", "eliminar", "listar"]}, "ticker": {"type": "string"}, "notas": {"type": "string"}}, "required": ["accion"]}
-)
-def _tool_manage_watchlist(inputs: dict):
-    accion = inputs["accion"]
-    if accion == "agregar":
-        ticker = inputs.get("ticker", "").upper()
-        if not ticker:
-            return "Error: se necesita un ticker para agregar"
-        agregar_watchlist(ticker, notas=inputs.get("notas", ""))
-        return {"ok": True, "data": f"✅ {ticker} agregado a la watchlist"}
-    elif accion == "eliminar":
-        ticker = inputs.get("ticker", "").upper()
-        if not ticker:
-            return "Error: se necesita un ticker para eliminar"
-        ok = eliminar_watchlist(ticker)
-        return {"ok": True, "data": f"{'✅ ' + ticker + ' eliminado' if ok else '⚠️ ' + ticker + ' no estaba en la watchlist'}"}
-    elif accion == "listar":
-        wl = obtener_watchlist()
-        if wl:
-            return {"ok": True, "data": [{"ticker": r[0], "precio_alerta": r[1], "notas": r[2]} for r in wl]}
-        else:
-            return {"ok": True, "data": "La watchlist está vacía"}
-    else:
-        return {"ok": False, "error": f"Acción desconocida para manage_watchlist: {accion}"}
-
-
-# ── Alertas ──
-
-@tool(
-    "manage_alerts",
-    "Alertas de precio ABSOLUTO: crear/eliminar/listar (ej 'avisame si AAPL baja de $150'). Para alertas de PORCENTAJE de movimiento (ej 'avisame si sube más de 5%'), usar manage_pct_alerts.",
-    {"type": "object", "properties": {"accion": {"type": "string", "enum": ["crear", "eliminar", "listar"]}, "ticker": {"type": "string"}, "precio": {"type": "number"}, "tipo": {"type": "string", "enum": ["minimo", "maximo"]}, "alerta_id": {"type": "integer"}}, "required": ["accion"]}
-)
-def _tool_manage_alerts(inputs: dict):
-    accion = inputs["accion"]
-    if accion == "crear":
-        ticker = inputs.get("ticker", "").upper()
-        precio = inputs.get("precio")
-        tipo = inputs.get("tipo", "minimo")
-        if not ticker or precio is None:
-            return "Error: se necesita ticker y precio para crear alerta"
-        crear_alerta(ticker, precio, tipo)
-        return {"ok": True, "data": f"✅ Alerta creada: avisar si {ticker} {'baja de' if tipo == 'minimo' else 'sube a'} ${precio}"}
-    elif accion == "eliminar":
-        alerta_id = inputs.get("alerta_id")
-        if alerta_id is None:
-            return "Error: se necesita alerta_id para eliminar"
-        ok = desactivar_alerta(alerta_id)
-        return {"ok": True, "data": f"{'✅ Alerta #' + str(alerta_id) + ' desactivada' if ok else '⚠️ No se encontró la alerta'}"}
-    elif accion == "listar":
-        alertas = obtener_alertas_activas()
-        if alertas:
-            return {"ok": True, "data": [{"id": a[0], "ticker": a[1], "precio_objetivo": a[2], "tipo": a[3]} for a in alertas]}
-        else:
-            return {"ok": True, "data": "No hay alertas activas"}
-    else:
-        return {"ok": False, "error": f"Acción desconocida para manage_alerts: {accion}"}
-
-
-# ── Alertas de porcentaje ──
-
-@tool(
-    "manage_pct_alerts",
-    "Alertas de PORCENTAJE de movimiento sobre un ticker (crear/eliminar/listar). El precio actual siempre se obtiene de yfinance (fuente externa), no de Wallbit. Dos referencias: 'dia' (% vs cierre de ayer) o 'compra' (% vs precio de compra, para P&L). IMPORTANTE: Wallbit hoy NO expone el costo promedio de compra en ningún campo — para referencia='compra' hay que pedirle al usuario su precio de compra si no lo dijo, y pasarlo en avg_cost_manual. Sin ese dato la alerta se crea pero nunca podrá dispararse.",
-    {
-        "type": "object",
-        "properties": {
-            "accion": {"type": "string", "enum": ["crear", "eliminar", "listar"]},
-            "ticker": {"type": "string"},
-            "umbral_pct": {"type": "number", "description": "Ej 5 = 5%"},
-            "direccion": {"type": "string", "enum": ["sube", "baja", "ambas"], "description": "Default: ambas"},
-            "referencia": {"type": "string", "enum": ["dia", "compra"], "description": "Default: dia"},
-            "avg_cost_manual": {"type": "number", "description": "Precio de compra dado por el usuario. Requerido en la práctica para referencia=compra porque Wallbit no lo expone hoy."},
-            "alerta_id": {"type": "integer"}
-        },
-        "required": ["accion"]
-    }
-)
-def _tool_manage_pct_alerts(inputs: dict):
-    accion = inputs["accion"]
-    if accion == "crear":
-        ticker = inputs.get("ticker", "").upper()
-        umbral_pct = inputs.get("umbral_pct")
-        direccion = inputs.get("direccion", "ambas")
-        referencia = inputs.get("referencia", "dia")
-        avg_cost_manual = inputs.get("avg_cost_manual")
-        if not ticker or umbral_pct is None:
-            return "Error: se necesita ticker y umbral_pct para crear la alerta"
-        crear_alerta_pct(ticker, umbral_pct, direccion, referencia, avg_cost_manual)
-        ref_str = "hoy vs cierre anterior" if referencia == "dia" else "desde tu precio de compra"
-        aviso = ""
-        if referencia == "compra" and avg_cost_manual is None:
-            aviso = " ⚠️ No me diste tu precio de compra y Wallbit no lo expone — esta alerta no va a poder dispararse hasta que me lo pases."
-        return {"ok": True, "data": f"✅ Alerta creada: avisar si {ticker} se mueve {direccion} {umbral_pct}% ({ref_str}).{aviso}"}
-    elif accion == "eliminar":
-        alerta_id = inputs.get("alerta_id")
-        if alerta_id is None:
-            return "Error: se necesita alerta_id para eliminar"
-        ok = desactivar_alerta_pct(alerta_id)
-        return {"ok": True, "data": f"{'✅ Alerta #' + str(alerta_id) + ' desactivada' if ok else '⚠️ No se encontró la alerta'}"}
-    elif accion == "listar":
-        alertas_pct = obtener_alertas_pct_activas()
-        if alertas_pct:
-            return {"ok": True, "data": [
-                {
-                    "id": a[0], "ticker": a[1], "umbral_pct": a[2], "direccion": a[3],
-                    "referencia": a[4], "avg_cost_manual": a[5],
-                    "funcional": a[4] == "dia" or a[5] is not None
-                }
-                for a in alertas_pct
-            ]}
-        else:
-            return {"ok": True, "data": "No hay alertas de porcentaje activas"}
-    else:
-        return {"ok": False, "error": f"Acción desconocida para manage_pct_alerts: {accion}"}
-
-
-# ── Presupuesto ──
-
-@tool(
-    "manage_budget",
-    "Presupuesto mensual por categorías.",
-    {"type": "object", "properties": {"accion": {"type": "string", "enum": ["crear", "listar", "actualizar_gasto"]}, "categoria": {"type": "string"}, "limite_usd": {"type": "number"}, "monto_adicional": {"type": "number"}}, "required": ["accion"]}
-)
-def _tool_manage_budget(inputs: dict):
-    accion = inputs["accion"]
-    if accion == "crear":
-        categoria = inputs.get("categoria")
-        limite = inputs.get("limite_usd")
-        if not categoria or limite is None:
-            return "Error: se necesita categoría y límite_usd"
-        crear_presupuesto(categoria, limite)
-        return {"ok": True, "data": f"✅ Presupuesto '{categoria}': ${limite}/mes"}
-    elif accion == "listar":
-        presupuestos = obtener_presupuestos()
-        if presupuestos:
-            return {"ok": True, "data": presupuestos}
-        else:
-            return {"ok": True, "data": "No hay presupuestos configurados"}
-    elif accion == "actualizar_gasto":
-        categoria = inputs.get("categoria")
-        monto = inputs.get("monto_adicional")
-        if not categoria or monto is None:
-            return "Error: se necesita categoría y monto_adicional"
-        actualizar_gasto_presupuesto(categoria, monto)
-        return {"ok": True, "data": f"✅ Sumado ${monto} al gasto de '{categoria}'"}
-    else:
-        return {"ok": False, "error": f"Acción desconocida para manage_budget: {accion}"}
-
-
-# ── Metas ──
-
-@tool(
-    "manage_goals",
-    "Metas financieras: crear/listar/actualizar.",
-    {"type": "object", "properties": {"accion": {"type": "string", "enum": ["crear", "listar", "actualizar_progreso"]}, "nombre": {"type": "string"}, "objetivo_usd": {"type": "number"}, "actual_usd": {"type": "number"}, "fecha_limite": {"type": "string"}}, "required": ["accion"]}
-)
-def _tool_manage_goals(inputs: dict):
-    accion = inputs["accion"]
-    if accion == "crear":
-        nombre_meta = inputs.get("nombre")
-        objetivo = inputs.get("objetivo_usd")
-        if not nombre_meta or objetivo is None:
-            return "Error: se necesita nombre y objetivo_usd"
-        crear_meta(nombre_meta, objetivo, inputs.get("fecha_limite"))
-        return {"ok": True, "data": f"✅ Meta '{nombre_meta}': ${objetivo}"}
-    elif accion == "listar":
-        metas = obtener_metas()
-        if metas:
-            return {"ok": True, "data": metas}
-        else:
-            return {"ok": True, "data": "No hay metas configuradas"}
-    elif accion == "actualizar_progreso":
-        nombre_meta = inputs.get("nombre")
-        actual = inputs.get("actual_usd")
-        if not nombre_meta or actual is None:
-            return "Error: se necesita nombre y actual_usd"
-        actualizar_progreso_meta(nombre_meta, actual)
-        return {"ok": True, "data": f"✅ Progreso de '{nombre_meta}' actualizado a ${actual}"}
-    else:
-        return {"ok": False, "error": f"Acción desconocida para manage_goals: {accion}"}
-
-
-# ── Configuración ──
-
-@tool(
-    "save_config",
-    "Guarda/lee configuración (MONTO_SUELDO, PORCENTAJE_DCA, etc).",
-    {"type": "object", "properties": {"accion": {"type": "string", "enum": ["guardar", "leer"]}, "clave": {"type": "string"}, "valor": {"type": "string"}}, "required": ["accion", "clave"]}
-)
-def _tool_save_config(inputs: dict):
-    accion = inputs["accion"]
-    clave = inputs["clave"]
-    if accion == "guardar":
-        valor = inputs.get("valor")
-        if valor is None:
-            return "Error: se necesita un valor para guardar"
-        guardar_config(clave, str(valor))
-        return {"ok": True, "data": f"✅ Guardado: {clave} = {valor}"}
-    elif accion == "leer":
-        valor = obtener_config(clave)
-        return {"ok": True, "data": {clave: valor if valor else "no configurado"}}
-    else:
-        return {"ok": False, "error": f"Acción desconocida para save_config: {accion}"}
-
-
-# ── Diario de trading ──
-
-@tool(
-    "trading_diary",
-    "Diario de trades: guardar/leer historial.",
-    {"type": "object", "properties": {"accion": {"type": "string", "enum": ["guardar", "leer"]}, "ticker": {"type": "string"}, "accion_trade": {"type": "string"}, "precio": {"type": "number"}, "monto": {"type": "number"}, "razonamiento": {"type": "string"}, "sesgo": {"type": "string"}, "limite": {"type": "integer"}}, "required": ["accion"]}
-)
-def _tool_trading_diary(inputs: dict):
-    accion = inputs["accion"]
-    if accion == "guardar":
-        ticker = inputs.get("ticker", "")
-        accion_trade = inputs.get("accion_trade", "")
-        precio = inputs.get("precio", 0)
-        monto = inputs.get("monto", 0)
-        razonamiento = inputs.get("razonamiento", "")
-        sesgo = inputs.get("sesgo", "")
-        guardar_trade_diario(ticker, accion_trade, precio, monto, razonamiento, sesgo)
-        return {"ok": True, "data": "✅ Entrada guardada en el diario de trading"}
-    elif accion == "leer":
-        limite = inputs.get("limite", 10)
-        entradas = obtener_diario_trading(limite)
-        if entradas:
-            return {"ok": True, "data": [
-                {"fecha": e[0], "ticker": e[1], "accion": e[2], "precio": e[3], "monto": e[4], "razonamiento": e[5]}
-                for e in entradas
-            ]}
-        else:
-            return {"ok": True, "data": "El diario de trading está vacío"}
-    else:
-        return {"ok": False, "error": f"Acción desconocida para trading_diary: {accion}"}
-
-
-# ── Datos de mercado (yfinance / FRED / SEC) ──
-
-@tool("yf_info", "Fundamentals de una acción: P/E, market cap, márgenes, crecimiento, consenso analistas.", {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]})
-def _tool_yf_info(inputs: dict):
-    return market_data.yf_get_info(inputs["ticker"])
-
-
-@tool("yf_history", "Historial de precios y rendimiento. period: 1d,5d,1mo,3mo,6mo,1y,2y,5y.", {"type": "object", "properties": {"ticker": {"type": "string"}, "period": {"type": "string"}}, "required": ["ticker"]})
-def _tool_yf_history(inputs: dict):
-    return market_data.yf_get_history(inputs["ticker"], inputs.get("period", "1y"))
-
-
-@tool("yf_financials", "Estado de resultados anual: ingresos, utilidad neta, EBITDA.", {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]})
-def _tool_yf_financials(inputs: dict):
-    return market_data.yf_get_financials(inputs["ticker"])
-
-
-@tool("yf_insiders", "Compras y ventas de insiders (directivos) de una empresa.", {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]})
-def _tool_yf_insiders(inputs: dict):
-    return market_data.yf_get_insiders(inputs["ticker"])
-
-
-@tool("yf_dividends", "Historial de dividendos de los últimos 5 años.", {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]})
-def _tool_yf_dividends(inputs: dict):
-    return market_data.yf_get_dividends(inputs["ticker"])
-
-
-@tool(
-    "fred_macro",
-    "Datos macroeconómicos de la Fed: inflacion_cpi, tasa_fed, desempleo, pib, rendimiento_10y, rendimiento_2y, indice_dolar, ventas_retail, confianza_consumidor.",
-    {"type": "object", "properties": {"serie": {"type": "string"}, "observaciones": {"type": "integer"}}, "required": ["serie"]}
-)
-def _tool_fred_macro(inputs: dict):
-    return market_data.fred_get_series(inputs["serie"], inputs.get("observaciones", 12))
-
-
-@tool(
-    "sec_filings",
-    "Filings de SEC EDGAR: 10-K, 10-Q, 8-K. Busca por nombre de empresa.",
-    {"type": "object", "properties": {"company": {"type": "string"}, "form_type": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["company"]}
-)
-def _tool_sec_filings(inputs: dict):
-    return market_data.sec_get_filings(inputs["company"], inputs.get("form_type", "10-K"), inputs.get("limit", 3))
-
-
-@tool("sec_facts", "Datos financieros oficiales de SEC por ticker: ingresos, utilidad, activos históricos.", {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]})
-def _tool_sec_facts(inputs: dict):
-    return market_data.sec_get_company_facts(inputs["ticker"])
-
-
-@tool(
-    "sec_busqueda_texto",
-    "Búsqueda de TEXTO COMPLETO dentro del contenido real de los filings de SEC EDGAR (no solo lista documentos, busca DENTRO de ellos). Usar para encontrar frases o riesgos específicos, ej: buscar 'supply chain' o 'customer concentration' dentro de los 10-K de una empresa, o ver qué empresas mencionan un riesgo particular. Pasar ticker para limitar la búsqueda a una sola empresa, o dejarlo vacío para buscar en toda la base de EDGAR.",
-    {
-        "type": "object",
-        "properties": {
-            "query": {"type": "string", "description": "Frase o palabra clave a buscar dentro de los documentos"},
-            "ticker": {"type": "string", "description": "Opcional, restringe la búsqueda a esta empresa"},
-            "form_type": {"type": "string", "description": "Opcional, ej 10-K, 10-Q, 8-K"},
-            "limit": {"type": "integer"}
-        },
-        "required": ["query"]
-    }
-)
-def _tool_sec_busqueda_texto(inputs: dict):
-    return market_data.sec_search_fulltext(
-        query=inputs["query"],
-        ticker=inputs.get("ticker"),
-        form_type=inputs.get("form_type"),
-        limit=inputs.get("limit", 10)
-    )
-
-
-@tool("yf_earnings_calendar", "Próxima fecha de earnings de un ticker y estimados de EPS/Revenue del consenso.", {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]})
-def _tool_yf_earnings_calendar(inputs: dict):
-    return market_data.yf_get_earnings_calendar(inputs["ticker"])
-
-
-@tool(
-    "check_earnings_upcoming",
-    "Chequea qué tickers del portafolio/watchlist reportan earnings en los próximos N días.",
-    {"type": "object", "properties": {"tickers": {"type": "array", "items": {"type": "string"}}, "days": {"type": "integer"}}, "required": ["tickers"]}
-)
-def _tool_check_earnings_upcoming(inputs: dict):
-    return market_data.check_earnings_upcoming(inputs["tickers"], inputs.get("days", 14))
-
-
-# ── Decision Log ──
-
-@tool(
-    "decision_log",
-    "Guarda o lee el historial de análisis sobre un ticker. Guardar: registra veredicto (alcista/bajista/neutral) + razonamiento + precio actual. Leer: muestra análisis anteriores sobre ese ticker para validar si la tesis fue correcta.",
-    {"type": "object", "properties": {"accion": {"type": "string", "enum": ["guardar", "leer"]}, "ticker": {"type": "string"}, "precio_momento": {"type": "number"}, "veredicto": {"type": "string", "enum": ["alcista", "bajista", "neutral"]}, "razonamiento": {"type": "string"}, "resultado": {"type": "string"}}, "required": ["accion", "ticker"]}
-)
-def _tool_decision_log(inputs: dict):
-    accion = inputs["accion"]
-    ticker = inputs["ticker"].upper()
-    if accion == "guardar":
-        veredicto = inputs.get("veredicto", "neutral")
-        razonamiento = inputs.get("razonamiento", "")
-        precio = inputs.get("precio_momento", 0)
-        guardar_decision(ticker, precio, veredicto, razonamiento)
-        return {"ok": True, "data": f"Decision guardada: {ticker} — {veredicto}"}
-    elif accion == "leer":
-        historial = obtener_decisiones_ticker(ticker, limite=5)
-        if historial:
-            return {"ok": True, "data": historial}
-        else:
-            return {"ok": True, "data": f"Sin historial previo de decisiones para {ticker}"}
-    else:
-        return {"ok": False, "error": f"Acción desconocida para decision_log: {accion}"}
-
-
-# ── Bull vs Bear ──
-
-@tool(
-    "bull_bear_analysis",
-    "Ejecuta un debate estructurado Bull vs Bear sobre un ticker: dos análisis opuestos con argumentos concretos. Usar cuando el usuario pide debate, análisis profundo, o 'convenceme/no me convenzas' de una acción.",
-    {"type": "object", "properties": {"ticker": {"type": "string"}, "contexto": {"type": "string"}}, "required": ["ticker"]}
-)
-def _tool_bull_bear_analysis(inputs: dict):
-    ticker = inputs["ticker"].upper()
-    contexto = inputs.get("contexto", "")
-    return {"ok": True, "data": _ejecutar_bull_bear(ticker, contexto)}
-
-
-# ── Screener de tesis ──
-
-@tool(
-    "thesis_screener",
-    "Filtra una lista de tickers candidatos con datos REALES de yfinance según criterios cuantitativos. Usar SIEMPRE después de brave_search cuando el usuario pida un screener/ideas basadas en una tesis: primero buscar 8-15 empresas candidatas con brave_search, extraer sus tickers, y después llamar esta herramienta para validarlas con números reales y descartar las que no cumplen.",
-    {
-        "type": "object",
-        "properties": {
-            "tickers": {"type": "array", "items": {"type": "string"}, "description": "Tickers candidatos a validar"},
-            "min_revenue_growth": {"type": "number", "description": "Ej 0.15 = mínimo 15% crecimiento YoY"},
-            "max_pe": {"type": "number"},
-            "min_market_cap": {"type": "number", "description": "En USD"},
-            "max_market_cap": {"type": "number", "description": "En USD"},
-            "min_profit_margin": {"type": "number", "description": "Ej 0.10 = mínimo 10% margen neto"},
-            "max_debt_to_equity": {"type": "number"}
-        },
-        "required": ["tickers"]
-    }
-)
-def _tool_thesis_screener(inputs: dict):
-    return market_data.screener_filtrar(
-        tickers=inputs["tickers"],
-        min_revenue_growth=inputs.get("min_revenue_growth"),
-        max_pe=inputs.get("max_pe"),
-        min_market_cap=inputs.get("min_market_cap"),
-        max_market_cap=inputs.get("max_market_cap"),
-        min_profit_margin=inputs.get("min_profit_margin"),
-        max_debt_to_equity=inputs.get("max_debt_to_equity")
-    )
-
-
-# ── Búsqueda global de noticias ──
-
-@tool(
-    "busqueda_global",
-    "Motor de búsqueda de noticias GLOBAL (Google News + GDELT), cubre prensa de cualquier país del mundo, no solo medios en inglés/EEUU como brave_search. Usar cuando se necesite cobertura de prensa local de un país específico (empresa australiana, europea, asiática, latinoamericana) o cuando brave_search no traiga resultados relevantes de ese mercado. Pasar el código de país ISO (AU, DE, JP, AR, BR, etc) e idioma (en, de, ja, es, etc) según de dónde sea la empresa. Devuelve título, URL, fuente y país — después usar leer_pagina_web sobre la URL más relevante para el texto completo.",
-    {
-        "type": "object",
-        "properties": {
-            "query": {"type": "string", "description": "Términos de búsqueda"},
-            "pais": {"type": "string", "description": "Código ISO 2 letras del país, ej AU, DE, JP, AR, BR"},
-            "idioma": {"type": "string", "description": "Código ISO 2 letras del idioma, ej en, de, ja, es"},
-            "count": {"type": "integer"}
-        },
-        "required": ["query"]
-    }
-)
-def _tool_busqueda_global(inputs: dict):
-    return global_search.busqueda_global(
-        query=inputs["query"],
-        pais=inputs.get("pais"),
-        idioma=inputs.get("idioma"),
-        count=inputs.get("count", 10)
-    )
-
-
-# ── Sentimiento social (StockTwits) ──
-
-@tool(
-    "sentimiento_social",
-    "Sentimiento de la comunidad de StockTwits (red social 100% financiera) sobre un ticker: % de mensajes Bullish vs Bearish, etiquetados por los propios usuarios. Mucho menos ruido que X/Twitter porque es una comunidad exclusiva de trading. Usar cuando el usuario pregunte 'qué dice la gente', 'sentimiento del mercado minorista', 'hype', o quiera pulso social de una acción.",
-    {"type": "object", "properties": {"ticker": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["ticker"]}
-)
-def _tool_sentimiento_social(inputs: dict):
-    return social_sentiment.stocktwits_sentiment(inputs["ticker"], inputs.get("limit", 30))
-
-
-# ── Reddit ──
-
-@tool(
-    "reddit_sentiment",
-    "Busca menciones de un ticker/empresa en subreddits financieros (r/wallstreetbets, r/stocks, r/investing, r/StockMarket) de la última semana, rankeadas por score (upvotes). Complementa a sentimiento_social (StockTwits): Reddit trae discusión más larga y con contexto, StockTwits trae el pulso Bullish/Bearish más directo. Usar cuando pidan 'qué dice reddit', 'hay hype en wallstreetbets', o sentimiento retail más profundo.",
-    {
-        "type": "object",
-        "properties": {
-            "query": {"type": "string", "description": "Ticker o nombre de empresa a buscar"},
-            "subreddits": {"type": "array", "items": {"type": "string"}, "description": "Opcional, default: wallstreetbets, stocks, investing, StockMarket"},
-            "limit": {"type": "integer"}
-        },
-        "required": ["query"]
-    }
-)
-def _tool_reddit_sentiment(inputs: dict):
-    return reddit_client.search_reddit(inputs["query"], inputs.get("subreddits"), inputs.get("limit", 10))
-
-
-# ── Lectura de páginas web completas ──
-
-@tool(
-    "leer_pagina_web",
-    "Entra a una URL específica y devuelve el texto completo de la página (no solo título/resumen). Usar cuando: (1) brave_search o busqueda_global devolvieron un snippet insuficiente y hace falta más detalle, (2) el usuario pide explícitamente meterse en la web oficial de una empresa (sección 'News'/'Newsroom'/'Investor Relations'), o (3) hay que leer un diario o foro específico de cualquier país. Internamente prueba lectura directa primero y si el sitio renderiza con JavaScript (contenido vacío), cae automáticamente a un lector con motor de render — no hace falta pedirlo. Máximo 2-3 llamadas por consulta para no gastar tokens de más.",
-    {
-        "type": "object",
-        "properties": {
-            "url": {"type": "string", "description": "URL completa a leer"},
-            "max_chars": {"type": "integer", "description": "Límite de caracteres a extraer, default 4000"}
-        },
-        "required": ["url"]
-    }
-)
-def _tool_leer_pagina_web(inputs: dict):
-    return web_reader.fetch_article_text(inputs["url"], inputs.get("max_chars", 4000))
-
-
-# TOOLS es lo que se manda a la API de Anthropic: se arma solo a partir de
-# todo lo registrado arriba con @tool, en el mismo orden en que se definió.
-TOOLS = [entry["schema"] for entry in TOOL_REGISTRY.values()]
-
-
-# ─── Executor de herramientas ──────────────────────────────────────────────────
-
-def ejecutar_herramienta(nombre: str, inputs: dict) -> str:
-    """Busca la tool en el registro y ejecuta su handler.
-
-    Antes esto era una cadena de 31 elif de ~340 líneas que vivía separada
-    de la lista TOOLS. Ahora cada tool trae su propio handler registrado
-    junto a su schema (arriba); acá solo queda el lookup + el manejo de
-    errores/formato, que es común a las 32 tools.
-    """
-    entry = TOOL_REGISTRY.get(nombre)
-    if not entry:
-        return f"Herramienta desconocida: {nombre}"
-
-    try:
-        resultado = entry["handler"](inputs)
-
-        # Algunos handlers devuelven un string de error directo (validación
-        # de inputs faltantes) en vez del dict {"ok": ..., "data"/"error": ...}
-        if isinstance(resultado, str):
-            return resultado
-
-        if resultado.get("ok"):
-            return json.dumps(resultado["data"], ensure_ascii=False, indent=2)
-        else:
-            return f"Error: {resultado.get('error', 'Error desconocido')}"
-
-    except Exception as e:
-        registrar_bitacora("error", f"Error en herramienta {nombre}: {str(e)}")
-        return f"Error ejecutando {nombre}: {str(e)}"
-
-# ─── Sistema prompt ────────────────────────────────────────────────────────────
+# La única tool que se queda en agente.py en vez de vivir en un módulo de
+# dominio: usa el cliente de Anthropic directamente (dos llamadas a Claude
+# Haiku para el debate bull/bear), que es orquestación del chat, no una
+# fuente de datos externa como las demás.
 
 def _ejecutar_bull_bear(ticker: str, contexto: str = "") -> str:
     """
@@ -694,6 +86,52 @@ def _ejecutar_bull_bear(ticker: str, contexto: str = "") -> str:
         f"{'─' * 40}\n"
         f"El veredicto final es tuyo. Guardá tu decision con /debate si queres trackearla."
     )
+
+
+@tool(
+    "bull_bear_analysis",
+    "Ejecuta un debate estructurado Bull vs Bear sobre un ticker: dos análisis opuestos con argumentos concretos. Usar cuando el usuario pide debate, análisis profundo, o 'convenceme/no me convenzas' de una acción.",
+    {"type": "object", "properties": {"ticker": {"type": "string"}, "contexto": {"type": "string"}}, "required": ["ticker"]}
+)
+def _tool_bull_bear_analysis(inputs: dict):
+    ticker = inputs["ticker"].upper()
+    contexto = inputs.get("contexto", "")
+    return {"ok": True, "data": _ejecutar_bull_bear(ticker, contexto)}
+
+
+TOOLS = [entry["schema"] for entry in TOOL_REGISTRY.values()]
+
+
+# ─── Executor de herramientas ──────────────────────────────────────────────────
+
+def ejecutar_herramienta(nombre: str, inputs: dict) -> str:
+    """Busca la tool en el registro y ejecuta su handler.
+
+    Antes esto era una cadena de 31 elif de ~340 líneas que vivía separada
+    de la lista TOOLS. Ahora cada tool trae su propio handler registrado
+    junto a su schema (arriba); acá solo queda el lookup + el manejo de
+    errores/formato, que es común a las 32 tools.
+    """
+    entry = TOOL_REGISTRY.get(nombre)
+    if not entry:
+        return f"Herramienta desconocida: {nombre}"
+
+    try:
+        resultado = entry["handler"](inputs)
+
+        # Algunos handlers devuelven un string de error directo (validación
+        # de inputs faltantes) en vez del dict {"ok": ..., "data"/"error": ...}
+        if isinstance(resultado, str):
+            return resultado
+
+        if resultado.get("ok"):
+            return json.dumps(resultado["data"], ensure_ascii=False, indent=2)
+        else:
+            return f"Error: {resultado.get('error', 'Error desconocido')}"
+
+    except Exception as e:
+        registrar_bitacora("error", f"Error en herramienta {nombre}: {str(e)}")
+        return f"Error ejecutando {nombre}: {str(e)}"
 
 
 # ─── System prompt modular ─────────────────────────────────────────────────────

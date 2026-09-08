@@ -27,6 +27,8 @@ import requests
 import os
 import time
 
+from tool_registry import tool
+
 REDDIT_SUBREDDITS_DEFAULT = ["wallstreetbets", "stocks", "investing", "StockMarket"]
 
 _token_cache = {"access_token": None, "expira": 0}
@@ -122,3 +124,22 @@ def search_reddit(query: str, subreddits: list = None, limit: int = 10) -> dict:
         return {"ok": False, "error": "Timeout consultando Reddit"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+# ─── Tool (Anthropic Tool Use) ──────────────────────────────────────────────────
+
+@tool(
+    "reddit_sentiment",
+    "Busca menciones de un ticker/empresa en subreddits financieros (r/wallstreetbets, r/stocks, r/investing, r/StockMarket) de la última semana, rankeadas por score (upvotes). Complementa a sentimiento_social (StockTwits): Reddit trae discusión más larga y con contexto, StockTwits trae el pulso Bullish/Bearish más directo. Usar cuando pidan 'qué dice reddit', 'hay hype en wallstreetbets', o sentimiento retail más profundo.",
+    {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Ticker o nombre de empresa a buscar"},
+            "subreddits": {"type": "array", "items": {"type": "string"}, "description": "Opcional, default: wallstreetbets, stocks, investing, StockMarket"},
+            "limit": {"type": "integer"}
+        },
+        "required": ["query"]
+    }
+)
+def _tool_reddit_sentiment(inputs: dict):
+    return search_reddit(inputs["query"], inputs.get("subreddits"), inputs.get("limit", 10))

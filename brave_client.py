@@ -2,6 +2,8 @@ import requests
 import os
 from datetime import datetime
 
+from tool_registry import tool
+
 BRAVE_BASE_URL = "https://api.search.brave.com/res/v1/web/search"
 BRAVE_NEWS_URL = "https://api.search.brave.com/res/v1/news/search"
 _cache = {}
@@ -50,3 +52,23 @@ def search_economic_calendar():
 
 def clear_cache():
     _cache.clear()
+
+
+# ─── Tool (Anthropic Tool Use) ──────────────────────────────────────────────────
+
+@tool(
+    "brave_search",
+    "Busca noticias financieras en tiempo real.",
+    {"type": "object", "properties": {"query": {"type": "string"}, "tipo": {"type": "string", "enum": ["web", "news"]}}, "required": ["query"]}
+)
+def _tool_brave_search(inputs: dict):
+    tipo = inputs.get("tipo", "news")
+    query = inputs["query"]
+    if tipo == "news":
+        items = search_news(query, count=5)
+    else:
+        items = search_web(query, count=5)
+    if items:
+        return {"ok": True, "data": items}
+    else:
+        return {"ok": False, "error": "Sin resultados"}

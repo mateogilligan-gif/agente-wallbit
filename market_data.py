@@ -6,6 +6,8 @@ import re
 import requests
 from datetime import datetime, timedelta
 
+from tool_registry import tool
+
 # ─── yfinance ─────────────────────────────────────────────────────────────────
 
 def yf_get_info(ticker: str) -> dict:
@@ -641,3 +643,119 @@ def sec_get_company_facts(ticker: str) -> dict:
         return {"ok": True, "data": {"ticker": ticker, "cik": cik, "metricas": metrics}}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+# ─── Tools (Anthropic Tool Use) ────────────────────────────────────────────────
+
+@tool("yf_info", "Fundamentals de una acción: P/E, market cap, márgenes, crecimiento, consenso analistas.", {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]})
+def _tool_yf_info(inputs: dict):
+    return yf_get_info(inputs["ticker"])
+
+
+@tool("yf_history", "Historial de precios y rendimiento. period: 1d,5d,1mo,3mo,6mo,1y,2y,5y.", {"type": "object", "properties": {"ticker": {"type": "string"}, "period": {"type": "string"}}, "required": ["ticker"]})
+def _tool_yf_history(inputs: dict):
+    return yf_get_history(inputs["ticker"], inputs.get("period", "1y"))
+
+
+@tool("yf_financials", "Estado de resultados anual: ingresos, utilidad neta, EBITDA.", {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]})
+def _tool_yf_financials(inputs: dict):
+    return yf_get_financials(inputs["ticker"])
+
+
+@tool("yf_insiders", "Compras y ventas de insiders (directivos) de una empresa.", {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]})
+def _tool_yf_insiders(inputs: dict):
+    return yf_get_insiders(inputs["ticker"])
+
+
+@tool("yf_dividends", "Historial de dividendos de los últimos 5 años.", {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]})
+def _tool_yf_dividends(inputs: dict):
+    return yf_get_dividends(inputs["ticker"])
+
+
+@tool(
+    "fred_macro",
+    "Datos macroeconómicos de la Fed: inflacion_cpi, tasa_fed, desempleo, pib, rendimiento_10y, rendimiento_2y, indice_dolar, ventas_retail, confianza_consumidor.",
+    {"type": "object", "properties": {"serie": {"type": "string"}, "observaciones": {"type": "integer"}}, "required": ["serie"]}
+)
+def _tool_fred_macro(inputs: dict):
+    return fred_get_series(inputs["serie"], inputs.get("observaciones", 12))
+
+
+@tool(
+    "sec_filings",
+    "Filings de SEC EDGAR: 10-K, 10-Q, 8-K. Busca por nombre de empresa.",
+    {"type": "object", "properties": {"company": {"type": "string"}, "form_type": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["company"]}
+)
+def _tool_sec_filings(inputs: dict):
+    return sec_get_filings(inputs["company"], inputs.get("form_type", "10-K"), inputs.get("limit", 3))
+
+
+@tool("sec_facts", "Datos financieros oficiales de SEC por ticker: ingresos, utilidad, activos históricos.", {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]})
+def _tool_sec_facts(inputs: dict):
+    return sec_get_company_facts(inputs["ticker"])
+
+
+@tool(
+    "sec_busqueda_texto",
+    "Búsqueda de TEXTO COMPLETO dentro del contenido real de los filings de SEC EDGAR (no solo lista documentos, busca DENTRO de ellos). Usar para encontrar frases o riesgos específicos, ej: buscar 'supply chain' o 'customer concentration' dentro de los 10-K de una empresa, o ver qué empresas mencionan un riesgo particular. Pasar ticker para limitar la búsqueda a una sola empresa, o dejarlo vacío para buscar en toda la base de EDGAR.",
+    {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Frase o palabra clave a buscar dentro de los documentos"},
+            "ticker": {"type": "string", "description": "Opcional, restringe la búsqueda a esta empresa"},
+            "form_type": {"type": "string", "description": "Opcional, ej 10-K, 10-Q, 8-K"},
+            "limit": {"type": "integer"}
+        },
+        "required": ["query"]
+    }
+)
+def _tool_sec_busqueda_texto(inputs: dict):
+    return sec_search_fulltext(
+        query=inputs["query"],
+        ticker=inputs.get("ticker"),
+        form_type=inputs.get("form_type"),
+        limit=inputs.get("limit", 10)
+    )
+
+
+@tool("yf_earnings_calendar", "Próxima fecha de earnings de un ticker y estimados de EPS/Revenue del consenso.", {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]})
+def _tool_yf_earnings_calendar(inputs: dict):
+    return yf_get_earnings_calendar(inputs["ticker"])
+
+
+@tool(
+    "check_earnings_upcoming",
+    "Chequea qué tickers del portafolio/watchlist reportan earnings en los próximos N días.",
+    {"type": "object", "properties": {"tickers": {"type": "array", "items": {"type": "string"}}, "days": {"type": "integer"}}, "required": ["tickers"]}
+)
+def _tool_check_earnings_upcoming(inputs: dict):
+    return check_earnings_upcoming(inputs["tickers"], inputs.get("days", 14))
+
+
+@tool(
+    "thesis_screener",
+    "Filtra una lista de tickers candidatos con datos REALES de yfinance según criterios cuantitativos. Usar SIEMPRE después de brave_search cuando el usuario pida un screener/ideas basadas en una tesis: primero buscar 8-15 empresas candidatas con brave_search, extraer sus tickers, y después llamar esta herramienta para validarlas con números reales y descartar las que no cumplen.",
+    {
+        "type": "object",
+        "properties": {
+            "tickers": {"type": "array", "items": {"type": "string"}, "description": "Tickers candidatos a validar"},
+            "min_revenue_growth": {"type": "number", "description": "Ej 0.15 = mínimo 15% crecimiento YoY"},
+            "max_pe": {"type": "number"},
+            "min_market_cap": {"type": "number", "description": "En USD"},
+            "max_market_cap": {"type": "number", "description": "En USD"},
+            "min_profit_margin": {"type": "number", "description": "Ej 0.10 = mínimo 10% margen neto"},
+            "max_debt_to_equity": {"type": "number"}
+        },
+        "required": ["tickers"]
+    }
+)
+def _tool_thesis_screener(inputs: dict):
+    return screener_filtrar(
+        tickers=inputs["tickers"],
+        min_revenue_growth=inputs.get("min_revenue_growth"),
+        max_pe=inputs.get("max_pe"),
+        min_market_cap=inputs.get("min_market_cap"),
+        max_market_cap=inputs.get("max_market_cap"),
+        min_profit_margin=inputs.get("min_profit_margin"),
+        max_debt_to_equity=inputs.get("max_debt_to_equity")
+    )

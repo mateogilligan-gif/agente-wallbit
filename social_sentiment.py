@@ -18,6 +18,8 @@ manejado con un mensaje claro en ese caso.
 """
 import requests
 
+from tool_registry import tool
+
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/120.0 Safari/537.36",
@@ -97,3 +99,14 @@ def stocktwits_sentiment(ticker: str, limit: int = 30) -> dict:
         return {"ok": False, "error": "Timeout consultando StockTwits"}
     except Exception as e:
         return {"ok": False, "error": f"Error consultando StockTwits: {str(e)}"}
+
+
+# ─── Tool (Anthropic Tool Use) ──────────────────────────────────────────────────
+
+@tool(
+    "sentimiento_social",
+    "Sentimiento de la comunidad de StockTwits (red social 100% financiera) sobre un ticker: % de mensajes Bullish vs Bearish, etiquetados por los propios usuarios. Mucho menos ruido que X/Twitter porque es una comunidad exclusiva de trading. Usar cuando el usuario pregunte 'qué dice la gente', 'sentimiento del mercado minorista', 'hype', o quiera pulso social de una acción.",
+    {"type": "object", "properties": {"ticker": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["ticker"]}
+)
+def _tool_sentimiento_social(inputs: dict):
+    return stocktwits_sentiment(inputs["ticker"], inputs.get("limit", 30))
