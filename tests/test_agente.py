@@ -84,3 +84,36 @@ def test_evaluar_disparo_pct_ganancia_desde_compra():
     )
     assert cambio_pct == 25.0
     assert dispara is True
+
+
+# ─── Prompt modular ─────────────────────────────────────────────────────────
+# Antes el system prompt era un solo string fijo con los 11 protocolos
+# siempre presentes. Ahora PROMPT_CORE va siempre y los módulos de
+# PROMPT_MODULES se suman solo si el mensaje trae sus palabras clave.
+
+def test_prompt_core_siempre_presente():
+    for msg in ["cuál es mi saldo?", "dame un debate de AAPL", "hola"]:
+        assert agente.PROMPT_CORE in agente.construir_system_prompt(msg)
+
+
+def test_prompt_mensaje_generico_no_suma_modulos():
+    p = agente.construir_system_prompt("cuál es mi saldo?")
+    assert p == agente.PROMPT_CORE
+
+
+def test_prompt_suma_solo_el_modulo_con_keyword():
+    p = agente.construir_system_prompt("dame un debate de AAPL")
+    assert agente.PROMPT_MODULES["bull_bear"]["texto"] in p
+    assert agente.PROMPT_MODULES["screener_tesis"]["texto"] not in p
+    assert agente.PROMPT_MODULES["morning_note"]["texto"] not in p
+
+
+def test_prompt_profundo_suma_todos_los_modulos_como_red_de_seguridad():
+    p = agente.construir_system_prompt("analizame TSLA en profundo")
+    for modulo in agente.PROMPT_MODULES.values():
+        assert modulo["texto"] in p
+
+
+def test_prompt_busca_keywords_tambien_en_contexto_extra():
+    p = agente.construir_system_prompt("dale, arrancá", contexto_extra="Dame mi Morning Briefing")
+    assert agente.PROMPT_MODULES["morning_note"]["texto"] in p

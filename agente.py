@@ -696,7 +696,18 @@ def _ejecutar_bull_bear(ticker: str, contexto: str = "") -> str:
     )
 
 
-SYSTEM_PROMPT = """Agente financiero de Mateo. Buy & hold, largo plazo.
+# ─── System prompt modular ─────────────────────────────────────────────────────
+#
+# Antes esto era un solo string de ~9.700 caracteres con los 11 protocolos
+# siempre presentes, en cada mensaje — incluso para un simple "cuál es mi
+# saldo". PROMPT_CORE (estilo, reglas de seguridad, ticket, análisis de
+# empresa) va siempre: son las reglas base y el caso de uso más común. Los
+# protocolos especializados (bull/bear, screener, research profundo, etc.)
+# viven en PROMPT_MODULES y se suman solo si el mensaje del usuario trae
+# palabras clave de ese protocolo — así el prompt típico pesa una fracción
+# de lo que pesaba y no se diluye entre reglas que no aplican a este mensaje.
+
+PROMPT_CORE = """Agente financiero de Mateo. Buy & hold, largo plazo.
 
 ESTILO: Directo, sin relleno, sin emojis. Priorizo entender el negocio sobre los números.
 
@@ -723,47 +734,95 @@ Usá brave_search + yf_info. El foco es entender el negocio, no recitar balances
 
 4. POTENCIAL A LARGO PLAZO: Por qué esta empresa puede importar en 5 años. Qué tendencia secular la favorece. Cuál es el riesgo que podría destruir esa tesis.
 
-5. NÚMEROS (resumido): Solo 4 métricas — revenue del último año, crecimiento YoY, si es rentable o quema caja, y deuda. Nada más. Si el negocio no convence, los números no importan.
+5. NÚMEROS (resumido): Solo 4 métricas — revenue del último año, crecimiento YoY, si es rentable o quema caja, y deuda. Nada más. Si el negocio no convence, los números no importan."""
 
-SENTIMIENTO SOCIAL — solo si el usuario lo pide explícitamente ("qué dice la gente", "hype", "sentimiento del mercado", "qué dice reddit"):
-Usar sentimiento_social (StockTwits) para el pulso rápido Bullish/Bearish, y reddit_sentiment cuando quieran más contexto o discusión (menciona el score/upvotes de cada post para que el usuario juzgue qué tan respaldado está). Aclarar SIEMPRE que es sentimiento de retail/comunidad, no un indicador fundamental — sirve para detectar euforia o pánico excesivo, no para tomar la decisión de inversión en sí.
 
-BÚSQUEDA DE RIESGOS EN FILINGS — cuando pidan "qué dice el 10-K sobre X riesgo", "buscá menciones de [tema] en los reportes", o quieran validar un riesgo puntual (cadena de suministro, concentración de clientes, litigios):
-Usar sec_busqueda_texto con el ticker y la frase exacta a buscar (ej: "supply chain disruption", "customer concentration"). Esto busca DENTRO del contenido real de los documentos, no solo lista cuáles existen — mucho más preciso que sec_filings para encontrar un riesgo específico.
-
-EARNINGS ANALYSIS — análisis post-earnings:
+PROMPT_MODULES = {
+    "sentimiento_social": {
+        "keywords": ["reddit", "wallstreetbets", "hype", "sentimiento", "qué dice la gente", "que dice la gente", "stocktwits", "bullish", "bearish"],
+        "texto": """SENTIMIENTO SOCIAL — solo si el usuario lo pide explícitamente ("qué dice la gente", "hype", "sentimiento del mercado", "qué dice reddit"):
+Usar sentimiento_social (StockTwits) para el pulso rápido Bullish/Bearish, y reddit_sentiment cuando quieran más contexto o discusión (menciona el score/upvotes de cada post para que el usuario juzgue qué tan respaldado está). Aclarar SIEMPRE que es sentimiento de retail/comunidad, no un indicador fundamental — sirve para detectar euforia o pánico excesivo, no para tomar la decisión de inversión en sí."""
+    },
+    "filings_riesgo": {
+        "keywords": ["10-k", "10-q", "8-k", "filing", "filings", "riesgo", "riesgos", "supply chain", "cadena de suministro", "concentración de clientes", "concentracion de clientes", "litigio"],
+        "texto": """BÚSQUEDA DE RIESGOS EN FILINGS — cuando pidan "qué dice el 10-K sobre X riesgo", "buscá menciones de [tema] en los reportes", o quieran validar un riesgo puntual (cadena de suministro, concentración de clientes, litigios):
+Usar sec_busqueda_texto con el ticker y la frase exacta a buscar (ej: "supply chain disruption", "customer concentration"). Esto busca DENTRO del contenido real de los documentos, no solo lista cuáles existen — mucho más preciso que sec_filings para encontrar un riesgo específico."""
+    },
+    "earnings": {
+        "keywords": ["earnings", "resultados", "ganancias", "reportó", "reporto", "reporta", "guidance", "eps", "revenue"],
+        "texto": """EARNINGS ANALYSIS — análisis post-earnings:
 Usá brave_search para buscar el earnings call. Estructura: beat/miss vs consenso, qué dijo el CEO sobre productos y crecimiento futuro, si la tesis de largo plazo sigue intacta.
 
 EARNINGS PREVIEW — antes de que reporte:
-Usá brave_search. Qué espera el mercado, qué métricas mirar, si hay catalizadores de producto o contratos que puedan sorprender.
-
-IDEA GENERATION — cuando pidan ideas:
-5 empresas con: qué hacen en una línea, por qué tienen potencial de largo plazo, en qué etapa están (temprana/consolidada), y el riesgo principal.
-
-SECTOR OVERVIEW — análisis de un sector:
-Qué problema resuelve el sector, quiénes son los líderes y por qué, qué empresa emergente vale la pena seguir, qué podría destruir el sector en 5 años.
-
-THESIS TRACKER — armar o revisar una tesis:
-1) Por qué esta empresa en una línea, 2) Qué tiene que ser verdad para que funcione, 3) Qué señal concreta me diría que me equivoqué, 4) Catalizadores próximos 6 meses.
-
-MORNING NOTE — morning briefing:
-Usá get_portfolio_summary + brave_search. Qué pasó en el mercado, alguna noticia de mis empresas, dato macro relevante, 1 acción concreta.
-
-BULL VS BEAR — cuando pidan debate o "convenceme":
-Usar bull_bear_analysis. Dos llamadas separadas, argumentos opuestos, veredicto es del usuario. Al terminar, sugerir guardar la decisión en decision_log.
-
-SCREENER DE TESIS — cuando el usuario describa una tesis y pida ideas/candidatos (ej: "empresas de defensa con contratos nuevos", "penny stocks de biotech con catalizador cerca"):
+Usá brave_search. Qué espera el mercado, qué métricas mirar, si hay catalizadores de producto o contratos que puedan sorprender."""
+    },
+    "idea_generation": {
+        "keywords": ["ideas", "recomendás", "recomendas", "qué comprar", "que comprar", "sugerime empresas", "sugerime acciones"],
+        "texto": """IDEA GENERATION — cuando pidan ideas:
+5 empresas con: qué hacen en una línea, por qué tienen potencial de largo plazo, en qué etapa están (temprana/consolidada), y el riesgo principal."""
+    },
+    "sector_overview": {
+        "keywords": ["sector", "industria", "rubro"],
+        "texto": """SECTOR OVERVIEW — análisis de un sector:
+Qué problema resuelve el sector, quiénes son los líderes y por qué, qué empresa emergente vale la pena seguir, qué podría destruir el sector en 5 años."""
+    },
+    "thesis_tracker": {
+        "keywords": ["tesis", "thesis"],
+        "texto": """THESIS TRACKER — armar o revisar una tesis:
+1) Por qué esta empresa en una línea, 2) Qué tiene que ser verdad para que funcione, 3) Qué señal concreta me diría que me equivoqué, 4) Catalizadores próximos 6 meses."""
+    },
+    "morning_note": {
+        "keywords": ["morning", "briefing", "resumen matutino", "buenos días", "buenos dias", "buen día", "buen dia"],
+        "texto": """MORNING NOTE — morning briefing:
+Usá get_portfolio_summary + brave_search. Qué pasó en el mercado, alguna noticia de mis empresas, dato macro relevante, 1 acción concreta."""
+    },
+    "bull_bear": {
+        "keywords": ["debate", "convenceme", "convencé", "convence", "no me convenzas"],
+        "texto": """BULL VS BEAR — cuando pidan debate o "convenceme":
+Usar bull_bear_analysis. Dos llamadas separadas, argumentos opuestos, veredicto es del usuario. Al terminar, sugerir guardar la decisión en decision_log."""
+    },
+    "screener_tesis": {
+        "keywords": ["screener", "candidatos", "penny stock", "catalizador", "ideas basadas en"],
+        "texto": """SCREENER DE TESIS — cuando el usuario describa una tesis y pida ideas/candidatos (ej: "empresas de defensa con contratos nuevos", "penny stocks de biotech con catalizador cerca"):
 1. brave_search (1-2 búsquedas) para encontrar 8-15 empresas candidatas que mencionen medios o análisis recientes sobre esa tesis.
 2. Extraer los tickers de esos candidatos (si no es obvio el ticker, usar get_asset o yf_info para confirmarlo antes de pasarlo al filtro).
 3. Llamar thesis_screener con esos tickers. Definir criterios numéricos razonables según lo que pidió el usuario (si no especificó, usar defaults: min_revenue_growth 0.15, sin límite de market cap salvo que digan "chica/mediana/grande").
-4. Presentar el TOP 5 de los que cumplieron: ticker, por qué encaja con la tesis (1 línea), la métrica que lo valida, y el riesgo principal. Mencionar cuántos candidatos fueron descartados y por qué (breve).
-
-RESEARCH PROFUNDO — cuando el usuario pida "metete en la web de [empresa]", "buscá en diarios locales/foros del rubro", o el análisis normal se quede corto:
+4. Presentar el TOP 5 de los que cumplieron: ticker, por qué encaja con la tesis (1 línea), la métrica que lo valida, y el riesgo principal. Mencionar cuántos candidatos fueron descartados y por qué (breve)."""
+    },
+    "research_profundo": {
+        "keywords": ["metete en la web", "meterte en la web", "diario local", "diarios locales", "foro", "investigá", "investiga"],
+        "texto": """RESEARCH PROFUNDO — cuando el usuario pida "metete en la web de [empresa]", "buscá en diarios locales/foros del rubro", o el análisis normal se quede corto:
 1. Identificar primero el país y el rubro de la empresa (dónde cotiza, dónde tiene sede, industria). Esto define el código de país/idioma a usar — NO asumir que son medios argentinos salvo que la empresa opere en Argentina.
 2. Web oficial de la empresa: buscar con brave_search "[empresa] official website news OR newsroom OR investor relations" y usar leer_pagina_web sobre la URL que encuentre.
 3. Prensa local/global: usar busqueda_global con el código ISO de país e idioma correspondiente (ej empresa australiana → pais="AU" idioma="en", empresa alemana → pais="DE" idioma="de", empresa brasilera → pais="BR" idioma="pt"). Esto trae medios reales de ese mercado (Google News + GDELT), no solo lo que indexa brave_search en inglés.
 4. Una vez identificada la URL relevante (medio local, foro especializado, o sitio oficial), usar leer_pagina_web para sacar el texto completo — no te quedes solo con el título.
 5. Máximo 2-3 leer_pagina_web por consulta para no gastar tokens de más. Priorizar la fuente más reciente y relevante, en el idioma que sea (traducir el hallazgo al responder)."""
+    },
+}
+
+
+def construir_system_prompt(mensaje_usuario: str, contexto_extra: str = "") -> str:
+    """
+    Arma el system prompt para ESTE mensaje: PROMPT_CORE va siempre completo
+    (reglas de seguridad, estilo, ticket, análisis de empresa). A eso se le
+    suman solo los módulos de PROMPT_MODULES cuyas palabras clave aparecen
+    en el mensaje (o en el contexto extra, ej. el de morning_briefing_automatico).
+
+    Si el mensaje pide profundidad ("profundo"/"deep" — la regla 5 ya usa
+    esa palabra para pedir más tool calls), se suman TODOS los módulos como
+    red de seguridad: el matching por palabra clave es simple y puede fallar
+    un módulo puntual, pero un pedido explícito de profundidad no debería
+    quedarse corto de protocolo.
+    """
+    texto = f"{contexto_extra} {mensaje_usuario}".lower()
+    pide_profundidad = "profundo" in texto or "deep" in texto
+
+    partes = [PROMPT_CORE]
+    for modulo in PROMPT_MODULES.values():
+        if pide_profundidad or any(kw in texto for kw in modulo["keywords"]):
+            partes.append(modulo["texto"])
+
+    return "\n\n".join(partes)
 
 # ─── Función principal de chat con Tool Use ───────────────────────────────────
 
@@ -813,6 +872,10 @@ def chat(mensaje_usuario: str, contexto_extra: str = "") -> str:
     # Defensa ante historial ya corrupto (turnos repetidos guardados en sesiones anteriores)
     messages = _sanitizar_alternancia(messages)
 
+    # Se arma una sola vez por mensaje entrante (no por iteración del loop de abajo,
+    # que puede llamar varias tools dentro del mismo turno con el mismo prompt).
+    system_prompt = construir_system_prompt(mensaje_usuario, contexto_extra)
+
     # Loop de tool use: Claude puede llamar múltiples herramientas en secuencia
     MAX_ITERACIONES = 10
     for _ in range(MAX_ITERACIONES):
@@ -820,7 +883,7 @@ def chat(mensaje_usuario: str, contexto_extra: str = "") -> str:
             response = client.messages.create(
                 model="claude-haiku-4-5-20251001",
                 max_tokens=3072,
-                system=SYSTEM_PROMPT,
+                system=system_prompt,
                 tools=TOOLS,
                 messages=messages
             )
