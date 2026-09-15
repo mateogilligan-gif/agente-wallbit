@@ -117,3 +117,45 @@ def test_prompt_profundo_suma_todos_los_modulos_como_red_de_seguridad():
 def test_prompt_busca_keywords_tambien_en_contexto_extra():
     p = agente.construir_system_prompt("dale, arrancá", contexto_extra="Dame mi Morning Briefing")
     assert agente.PROMPT_MODULES["morning_note"]["texto"] in p
+
+
+# ─── Módulo de inversión de sueldo (DCA con split fijo) ─────────────────────
+
+def test_prompt_suma_modulo_sueldo_con_keyword_explicita():
+    p = agente.construir_system_prompt("quiero configurar el split fijo de mi sueldo")
+    assert agente.PROMPT_MODULES["inversion_sueldo_dca"]["texto"] in p
+
+
+def test_prompt_suma_modulo_sueldo_en_el_chequeo_automatico_diario():
+    """El job diario de telegram_bot.py manda esto como contexto_extra — tiene
+    que disparar el módulo igual que si Mateo lo pidiera por chat."""
+    p = agente.construir_system_prompt("Chequeo automático de sueldo.", contexto_extra="CHEQUEO_AUTOMATICO_SUELDO: revisá list_transactions...")
+    assert agente.PROMPT_MODULES["inversion_sueldo_dca"]["texto"] in p
+
+
+def test_modulo_sueldo_no_tiene_excepciones_a_la_confirmacion():
+    """Guardrail de regresión: el texto del módulo no debe sugerir nunca
+    ejecutar create_trade sin el SÍ explícito del usuario, ni siquiera en el
+    chequeo automático."""
+    texto = agente.PROMPT_MODULES["inversion_sueldo_dca"]["texto"]
+    assert "SIN_NOVEDADES" in texto  # la corrida silenciosa no manda mensajes falsos
+    assert "NO tiene excepciones" in texto  # la regla de confirmación se reafirma explícitamente
+
+
+def test_modulo_sueldo_pregunta_dia_aproximado_y_no_asume_el_emisor_de_nadie():
+    """Guardrail de regresión: la detección por emisor ('Origen: Wallbit LLC')
+    fue un hallazgo puntual de la cuenta de Mateo, no una verdad general del
+    bot — el wizard tiene que preguntarle a cada usuario, no asumir la
+    respuesta de nadie más. También cubre que la fecha aproximada del sueldo
+    quedó como señal extra de refuerzo."""
+    texto = agente.PROMPT_MODULES["inversion_sueldo_dca"]["texto"]
+    assert "DCA_SUELDO_DIA_APROX" in texto
+    assert "no asumir la respuesta de nadie más" in texto
+
+
+def test_modulo_sueldo_avisa_el_tope_de_10_tickers():
+    """El tope de 10 tickers está aplicado en código (salary_dca.validar_split),
+    pero también tiene que estar en el wizard para que el LLM no deje que el
+    usuario configure de más y se entere recién al fallar la tool."""
+    texto = agente.PROMPT_MODULES["inversion_sueldo_dca"]["texto"]
+    assert "Máximo 10 tickers" in texto

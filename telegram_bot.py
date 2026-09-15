@@ -1,10 +1,10 @@
 import os
 import logging
-from datetime import time as dtime
+from datetime import time as dtime, date
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 from dotenv import load_dotenv
-from database import init_db
+from database import init_db, obtener_config, guardar_config
 import agente
 import research_campaigns
 
@@ -177,6 +177,32 @@ async def research_diario(context: ContextTypes.DEFAULT_TYPE):
     await _enviar_texto_largo_bot(context.bot, AUTHORIZED_USER_ID, texto, parse_mode="Markdown")
 
 
+async def chequear_sueldo_diario(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Corre una vez por día: le pide al agente (vía chat, con contexto especial
+    CHEQUEO_AUTOMATICO_SUELDO) que revise list_transactions buscando un
+    depósito nuevo que parezca sueldo desde la última corrida. La ventana de
+    fechas (DCA_SUELDO_ULTIMA_FECHA) la mueve este código, no el LLM — así el
+    "desde cuándo" es determinístico aunque la detección en sí (si ESE
+    depósito puntual parece o no un sueldo) sea juicio del modelo.
+
+    Si no hay novedades, el módulo de prompt le pide al LLM que responda
+    exactamente "SIN_NOVEDADES" — para no mandar un mensaje de Telegram
+    vacío todos los días.
+    """
+    if not AUTHORIZED_USER_ID:
+        return
+    ultima_fecha = obtener_config("DCA_SUELDO_ULTIMA_FECHA") or "sin fecha previa (primera corrida, revisá todo el historial reciente)"
+    contexto_extra = (
+        f"CHEQUEO_AUTOMATICO_SUELDO: revisá list_transactions y fijate si hay un depósito que parezca "
+        f"sueldo (comparando el monto contra DCA_SUELDO_MONTO_APROX guardado) con fecha posterior a {ultima_fecha}."
+    )
+    respuesta = agente.chat("Chequeo automático de sueldo.", contexto_extra=contexto_extra)
+    guardar_config("DCA_SUELDO_ULTIMA_FECHA", date.today().isoformat())
+    if respuesta.strip() != "SIN_NOVEDADES":
+        await _enviar_texto_largo_bot(context.bot, AUTHORIZED_USER_ID, respuesta)
+
+
 def main():
     init_db()
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
@@ -199,6 +225,9 @@ def main():
 
     # Research de campañas activas a las 7:00am Argentina (10:00 UTC)
     app.job_queue.run_daily(research_diario, time=dtime(hour=10, minute=0))
+
+    # Chequeo de sueldo a las 9:00am Argentina (12:00 UTC) — después de la apertura de mercado
+    app.job_queue.run_daily(chequear_sueldo_diario, time=dtime(hour=12, minute=0))
 
     logger.info("🤖 Agente Wallbit iniciado vía Telegram.")
     app.run_polling()

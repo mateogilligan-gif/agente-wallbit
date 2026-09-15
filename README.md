@@ -219,6 +219,7 @@ agente-wallbit/
 ├── reddit_client.py     # Discusión vía Reddit — requiere credenciales propias (1 tool)
 ├── apewisdom_client.py  # Volumen de menciones en Reddit, sin credenciales (1 tool)
 ├── research_campaigns.py # Campañas de research diario por ticker (ver sección propia)
+├── salary_dca.py         # Split de inversión de sueldo — cálculo de montos (1 tool)
 ├── telegram_bot.py      # Bot de Telegram + jobs automáticos
 ├── tests/               # Suite de tests (corre sin red, ver sección Tests)
 ├── requirements.txt     # Dependencias de Python
@@ -227,7 +228,7 @@ agente-wallbit/
 ```
 
 Cada módulo de dominio registra sus propias tools con `@tool(...)` (de
-`tool_registry.py`) junto a la lógica que ya tenía — 34 tools en total,
+`tool_registry.py`) junto a la lógica que ya tenía — 35 tools en total,
 repartidas por dominio en vez de vivir todas juntas en `agente.py`.
 `research_campaigns.py` es la excepción: no registra ninguna tool propia
 (la tool `manage_research_campaign` vive en `database.py`, que es quien
@@ -281,13 +282,35 @@ los días pedidos, o antes si le pedís *"detené la campaña #1"*.
 Comandos vía chat: *"seguime estos tickers por N días"* (crear), *"cómo van
 mis campañas de research"* (listar), *"detené la campaña #X"* (detener).
 
+## Inversión automática de sueldo (DCA con split fijo)
+
+Un wizard de alta pregunta el monto aproximado del sueldo (identificador
+principal y obligatorio), el día del mes en que suele llegar (opcional,
+señal extra), si hay algún dato que identifique a quien lo transfiere en las
+transacciones o si siempre es algo genérico (esto se pregunta siempre, no se
+asume — en la cuenta de Mateo el campo "Origen" da siempre "Wallbit LLC", el
+rail, no el empleador, pero eso no es necesariamente igual para otras
+cuentas), qué tickers incluir (máximo 10, tope aplicado en código), y si el reparto es equitativo o personalizado
+por porcentaje. Todos los días el bot revisa las transacciones buscando un
+depósito dentro de ese rango de monto (reforzado por día y/o emisor si hay
+alguno guardado); si encuentra uno, avisa y pide transferir la plata a la
+cuenta de Inversión manualmente (Wallbit no tiene API de transferencia
+interna). Una vez confirmado el traspaso, el bot calcula el monto exacto
+para cada ticker con `calcular_split_sueldo` (el redondeo siempre lo hace
+código, nunca el modelo a mano) y arma el ticket. **Nunca ejecuta ninguna
+compra sin una respuesta SÍ explícita** — ni siquiera en el chequeo
+automático diario, que si no encuentra nada nuevo no manda ningún mensaje.
+
+Paso a paso completo: ver `docs/inversion_sueldo_dca.md`.
+
 ## Jobs automáticos
 
-El bot corre tres tareas en segundo plano sin que tengas que pedirlas:
+El bot corre cuatro tareas en segundo plano sin que tengas que pedirlas:
 
 - **Cada 30 minutos**: verifica alertas de precio de tu watchlist y notifica si alguna se disparó
 - **Todos los días a las 7am (Argentina)**: corre las campañas de research activas y avisa cuántas novedades encontró
 - **Todos los días a las 8am (Argentina)**: revisa si alguna empresa de tu portfolio reporta earnings esa semana y te avisa
+- **Todos los días a las 9am (Argentina)**: revisa si llegó un depósito que parezca sueldo; si es así, te avisa y arma el ticket de inversión (nunca ejecuta solo)
 
 ---
 

@@ -22,6 +22,7 @@ import global_search     # noqa: F401 — registra la tool busqueda_global
 import social_sentiment  # noqa: F401 — registra la tool sentimiento_social
 import reddit_client     # noqa: F401 — registra la tool reddit_sentiment (Reddit rechazó el acceso, ver apewisdom_client)
 import apewisdom_client  # noqa: F401 — registra la tool reddit_mentions_trending
+import salary_dca        # noqa: F401 — registra la tool calcular_split_sueldo
 
 
 # ─── Bull vs Bear ──────────────────────────────────────────────────────────
@@ -241,6 +242,33 @@ Usar bull_bear_analysis. Dos llamadas separadas, argumentos opuestos, veredicto 
         "keywords": ["seguime estos", "seguime esta", "trackeame", "campaña de research", "todos los días levantame", "todos los dias levantame", "por 30 dias", "por 30 días", "durante el próximo mes", "durante el proximo mes", "por un mes"],
         "texto": """CAMPAÑA DE RESEARCH — cuando pidan seguimiento diario de una lista de tickers por un período (ej "seguime estos tickers por 30 días", "quiero que levantes info de X e Y todos los días"):
 Usar manage_research_campaign(crear, tickers=[...], dias=N, default 30). Aclarar que el bot revisa novedades UNA VEZ POR DÍA (no en el momento) y las va sumando a un HTML local que se actualiza solo — no resume nada, solo junta los links de lo que encuentre (noticias, filings SEC, pulso de sentimiento social) sin repetir lo ya visto. Usar manage_research_campaign(listar) para consultar el progreso de campañas activas, y (detener) para cortar una antes de tiempo."""
+    },
+    "inversion_sueldo_dca": {
+        "keywords": ["sueldo", "dca de sueldo", "split fijo", "inversión automática", "inversion automatica",
+                      "chequeo_automatico_sueldo", "configurar split", "configurar dca", "invertir mi sueldo"],
+        "texto": """INVERSIÓN AUTOMÁTICA DE SUELDO (DCA con split fijo) — la regla 1 (confirmación explícita antes de create_trade) NO tiene excepciones acá, ni siquiera en el chequeo automático.
+
+ALTA (wizard — cuando pida armar/registrar/configurar esta función por primera vez, o pida rehacerla): esto lo puede configurar cualquier usuario del bot, no asumas nada de la cuenta de nadie en particular — todo se pregunta. Preguntar en orden, agrupando lo que se pueda en un solo mensaje si el usuario ya adelantó datos:
+1. "¿Cuál es el monto aproximado de tu sueldo?" — dato PRIMARIO y obligatorio para detectarlo (puede variar un poco mes a mes por aumentos, horas extra, etc, por eso se compara con tolerancia, no exacto).
+2. "¿Más o menos qué día del mes solés recibirlo?" (ej. "día 1", "últimos días del mes") — opcional pero recomendado: es una señal extra que ayuda a no confundirlo con otro depósito grande que caiga en un día cualquiera.
+3. "Cuando mirás tus transacciones en Wallbit, ¿aparece algún dato que identifique quién te lo transfiere (nombre de tu empleador, alguna referencia), o siempre ves algo genérico (ej. el nombre de la plataforma/rail, no de la empresa)?" — esto varía por usuario y por cómo le llega la plata a cada uno; no asumir la respuesta de nadie más. Si tiene un dato específico y útil, guardarlo como señal de refuerzo opcional. Si es genérico (como le pasa a Mateo, que ve "Wallbit LLC"), no guardar nada ahí y confiar solo en monto + fecha.
+4. "¿Qué tickers querés incluir en el DCA?" Máximo 10 tickers — si pide más, avisale el límite y pedile que elija hasta 10 (o le sugerís agrupar en un ETF del sector en vez de tantas posiciones individuales).
+5. "¿Reparto equitativo entre esos tickers, o personalizado?" Si elige personalizado, pedir el % de cada ticker (deben sumar 100).
+Guardar todo con save_config: DCA_SUELDO_MONTO_APROX, DCA_SUELDO_DIA_APROX (si lo dio), DCA_SUELDO_EMISOR (solo si el usuario confirmó que ve un dato específico y útil), y DCA_SUELDO_SPLIT — para armar este último, llamar calcular_split_sueldo con 'tickers' (reparto equitativo) o 'split' con los % (personalizado) y guardar el JSON de "asignaciones" que devuelve la tool (solo ticker+pct, no el monto) bajo esa clave.
+
+DETECTAR: al revisar list_transactions (a pedido o en el chequeo automático diario), un depósito se considera "sueldo" si su monto está dentro de un ±15% del DCA_SUELDO_MONTO_APROX guardado — esta es la condición base y obligatoria. Sumar confianza con las señales que haya disponibles: si hay DCA_SUELDO_DIA_APROX guardado, que la fecha del depósito esté cerca de ese día (unos días de margen); si hay DCA_SUELDO_EMISOR guardado, que aparezca en la descripción de la transacción. Cuantas más señales coincidan, más confianza. Si no hay monto guardado, usar como respaldo el heurístico más flojo de antes: un depósito notablemente más grande que los ingresos recientes normales. Si no estás seguro, preguntale al usuario si ese ingreso es su sueldo antes de seguir — nunca asumas.
+
+AVISAR Y PEDIR TRASPASO MANUAL: Wallbit no tiene API de transferencia interna y no está permitido simularla ni inventarla. Mandar: "[💰 SUELDO DETECTADO] Vi que ingresaron $X. Pasalo vos a la cuenta de Inversión desde el celu y avisame cuando esté." Esperar su confirmación de que ya transfirió antes de seguir.
+
+CALCULAR: una vez que confirma el traspaso, llamar SIEMPRE a calcular_split_sueldo(monto_total=X) — nunca calcules el split a mano, esa tool ya hace el redondeo exacto y usa el split guardado si no le pasás uno. Si la tool devuelve error porque no hay split guardado, preguntale a Mateo cuál split quiere antes de seguir.
+
+TICKET: usar el "ticket_sugerido" que devuelve la tool, tal cual (ya viene con una línea por ticker y la pregunta de confirmación).
+
+EJECUTAR: solo si responde SÍ, llamar create_trade una vez por cada ticker de las asignaciones calculadas. Si dice NO, no ejecutar nada.
+
+REGISTRAR: guardar en bitácora (registrar_bitacora) fecha, monto total y el split ejecutado.
+
+CHEQUEO AUTOMÁTICO DIARIO: si el mensaje trae contexto CHEQUEO_AUTOMATICO_SUELDO, es una corrida programada silenciosa — si no encontrás ningún depósito nuevo que parezca sueldo, respondé EXACTAMENTE la palabra SIN_NOVEDADES y nada más (así no se manda un mensaje de Telegram sin novedades reales)."""
     },
 }
 
