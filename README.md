@@ -290,16 +290,20 @@ señal extra), si hay algún dato que identifique a quien lo transfiere en las
 transacciones o si siempre es algo genérico (esto se pregunta siempre, no se
 asume — en la cuenta de Mateo el campo "Origen" da siempre "Wallbit LLC", el
 rail, no el empleador, pero eso no es necesariamente igual para otras
-cuentas), qué tickers incluir (máximo 10, tope aplicado en código), y si el reparto es equitativo o personalizado
-por porcentaje. Todos los días el bot revisa las transacciones buscando un
-depósito dentro de ese rango de monto (reforzado por día y/o emisor si hay
-alguno guardado); si encuentra uno, avisa y pide transferir la plata a la
-cuenta de Inversión manualmente (Wallbit no tiene API de transferencia
-interna). Una vez confirmado el traspaso, el bot calcula el monto exacto
-para cada ticker con `calcular_split_sueldo` (el redondeo siempre lo hace
-código, nunca el modelo a mano) y arma el ticket. **Nunca ejecuta ninguna
-compra sin una respuesta SÍ explícita** — ni siquiera en el chequeo
-automático diario, que si no encuentra nada nuevo no manda ningún mensaje.
+cuentas), qué % de ese sueldo invertir en el DCA o un monto fijo en dólares
+(por default NO se invierte el depósito completo, solo la porción elegida),
+qué tickers incluir (máximo 10, tope aplicado en código), y si el reparto es
+equitativo o personalizado por porcentaje. Todos los días el bot revisa las
+transacciones buscando un depósito dentro de ese rango de monto (reforzado
+por día y/o emisor si hay alguno guardado); si encuentra uno, calcula cuánto
+invertir con `calcular_monto_a_invertir_sueldo` y avisa pidiendo transferir
+solo esa porción a la cuenta de Inversión manualmente (Wallbit no tiene API
+de transferencia interna). Una vez confirmado el traspaso, el bot calcula el
+monto exacto para cada ticker con `calcular_split_sueldo` (el redondeo
+siempre lo hace código, nunca el modelo a mano) y arma el ticket. **Nunca
+ejecuta ninguna compra sin una respuesta SÍ explícita** — ni siquiera en el
+chequeo automático diario, que si no encuentra nada nuevo no manda ningún
+mensaje.
 
 Paso a paso completo: ver `docs/inversion_sueldo_dca.md`.
 

@@ -126,6 +126,35 @@ def calcular_montos(monto_total: float, split: list) -> list:
     return asignaciones
 
 
+def calcular_monto_a_invertir(monto_sueldo: float, modo: str, valor: float) -> float:
+    """
+    Función pura: dado el monto del sueldo detectado y la preferencia del
+    usuario (invertir un % de cada sueldo, o un monto fijo en dólares),
+    devuelve cuánto de ese sueldo hay que destinar al DCA — NO todo el
+    depósito, salvo que el usuario haya elegido justamente 100%.
+
+    modo="porcentaje": valor es un % (0-100] del sueldo detectado.
+    modo="fijo": valor es un monto en USD, que no puede superar el sueldo
+    detectado (no tiene sentido pedirle que transfiera más de lo que cobró).
+    """
+    if monto_sueldo <= 0:
+        raise ValueError("El monto del sueldo tiene que ser mayor a 0")
+
+    if modo == "porcentaje":
+        if not isinstance(valor, (int, float)) or not (0 < valor <= 100):
+            raise ValueError("El porcentaje a invertir tiene que ser un número entre 0 y 100")
+        return round(monto_sueldo * valor / 100, 2)
+
+    if modo == "fijo":
+        if not isinstance(valor, (int, float)) or valor <= 0:
+            raise ValueError("El monto fijo a invertir tiene que ser mayor a 0")
+        if valor > monto_sueldo:
+            raise ValueError(f"El monto fijo (${valor}) es mayor al sueldo detectado (${monto_sueldo}) — no se puede invertir más de lo que ingresó")
+        return round(valor, 2)
+
+    raise ValueError(f"Modo desconocido: '{modo}' (tiene que ser 'porcentaje' o 'fijo')")
+
+
 def armar_texto_ticket(monto_total: float, asignaciones: list) -> str:
     """Texto determinístico del ticket, para no depender de que el LLM sume bien."""
     lineas = [f"Ticket de inversión de sueldo — ${monto_total:.2f} total:"]
@@ -133,6 +162,55 @@ def armar_texto_ticket(monto_total: float, asignaciones: list) -> str:
         lineas.append(f"- {a['ticker']}: ${a['monto']:.2f} ({a['pct']}%) — MARKET")
     lineas.append("¿Confirmás las {} compras? (SÍ/NO)".format(len(asignaciones)))
     return "\n".join(lineas)
+
+
+@tool(
+    "calcular_monto_a_invertir_sueldo",
+    "Calcula cuánto de un sueldo detectado hay que destinar al DCA — NO se invierte el depósito completo, solo la porción configurada. "
+    "SIEMPRE usar esta tool antes de pedir el traspaso manual y antes de calcular_split_sueldo — nunca calcular esto a mano. "
+    "Si no se pasan 'modo' y 'valor', usa lo guardado en config (DCA_SUELDO_MODO_MONTO / DCA_SUELDO_MONTO_VALOR).",
+    {
+        "type": "object",
+        "properties": {
+            "monto_sueldo": {"type": "number", "description": "Monto del sueldo detectado en la transacción"},
+            "modo": {"type": "string", "enum": ["porcentaje", "fijo"], "description": "'porcentaje' para invertir un % del sueldo, 'fijo' para un monto en USD constante"},
+            "valor": {"type": "number", "description": "El % (si modo=porcentaje) o el monto en USD (si modo=fijo)"}
+        },
+        "required": ["monto_sueldo"]
+    }
+)
+def _tool_calcular_monto_a_invertir_sueldo(inputs: dict):
+    from database import obtener_config  # import diferido: evita ciclo con database.py
+
+    monto_sueldo = inputs["monto_sueldo"]
+    modo = inputs.get("modo")
+    valor = inputs.get("valor")
+
+    if not modo or valor is None:
+        modo = modo or obtener_config("DCA_SUELDO_MODO_MONTO")
+        valor_guardado = obtener_config("DCA_SUELDO_MONTO_VALOR")
+        if valor is None and valor_guardado is not None:
+            try:
+                valor = float(valor_guardado)
+            except ValueError:
+                valor = None
+        if not modo or valor is None:
+            return {"ok": False, "error": "No hay preferencia guardada (DCA_SUELDO_MODO_MONTO / DCA_SUELDO_MONTO_VALOR) y no se pasó 'modo'/'valor'. Preguntale al usuario qué % o monto fijo de su sueldo quiere invertir."}
+
+    try:
+        monto_a_invertir = calcular_monto_a_invertir(monto_sueldo, modo, valor)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+
+    return {
+        "ok": True,
+        "data": {
+            "monto_sueldo": monto_sueldo,
+            "modo": modo,
+            "valor": valor,
+            "monto_a_invertir": monto_a_invertir,
+        }
+    }
 
 
 @tool(

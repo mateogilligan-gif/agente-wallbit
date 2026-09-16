@@ -159,3 +159,14 @@ def test_modulo_sueldo_avisa_el_tope_de_10_tickers():
     usuario configure de más y se entere recién al fallar la tool."""
     texto = agente.PROMPT_MODULES["inversion_sueldo_dca"]["texto"]
     assert "Máximo 10 tickers" in texto
+
+
+def test_modulo_sueldo_no_invierte_el_sueldo_completo_por_default():
+    """Guardrail de regresión: el bug que Mateo encontró — el wizard tiene que
+    preguntar qué % o monto fijo del sueldo invertir, y el traspaso/split se
+    calculan sobre esa porción (calcular_monto_a_invertir_sueldo), NUNCA
+    sobre el depósito completo salvo que el usuario elija 100%."""
+    texto = agente.PROMPT_MODULES["inversion_sueldo_dca"]["texto"]
+    assert "calcular_monto_a_invertir_sueldo" in texto
+    assert "no se invierte el sueldo completo" in texto
+    assert "NUNCA el sueldo completo" in texto

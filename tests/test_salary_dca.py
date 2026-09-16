@@ -200,3 +200,71 @@ def test_tool_con_mas_de_10_tickers_devuelve_error_claro():
     resultado = salary_dca._tool_calcular_split_sueldo({"monto_total": 100, "tickers": [f"T{i}" for i in range(11)]})
     assert resultado["ok"] is False
     assert "10" in resultado["error"]
+
+
+# ─── calcular_monto_a_invertir ──────────────────────────────────────────────
+
+def test_calcular_monto_a_invertir_modo_porcentaje():
+    assert salary_dca.calcular_monto_a_invertir(1500, "porcentaje", 10) == 150.0
+
+
+def test_calcular_monto_a_invertir_modo_fijo():
+    assert salary_dca.calcular_monto_a_invertir(1500, "fijo", 200) == 200.0
+
+
+def test_calcular_monto_a_invertir_no_invierte_todo_por_default():
+    # Con 10% de un sueldo de 1500, el resultado NO puede ser 1500 (todo el sueldo)
+    monto = salary_dca.calcular_monto_a_invertir(1500, "porcentaje", 10)
+    assert monto < 1500
+
+
+def test_calcular_monto_a_invertir_porcentaje_100_invierte_todo():
+    assert salary_dca.calcular_monto_a_invertir(1500, "porcentaje", 100) == 1500.0
+
+
+def test_calcular_monto_a_invertir_rechaza_porcentaje_fuera_de_rango():
+    import pytest
+    with pytest.raises(ValueError):
+        salary_dca.calcular_monto_a_invertir(1500, "porcentaje", 150)
+    with pytest.raises(ValueError):
+        salary_dca.calcular_monto_a_invertir(1500, "porcentaje", 0)
+
+
+def test_calcular_monto_a_invertir_rechaza_fijo_mayor_al_sueldo():
+    import pytest
+    with pytest.raises(ValueError):
+        salary_dca.calcular_monto_a_invertir(1500, "fijo", 2000)
+
+
+def test_calcular_monto_a_invertir_rechaza_modo_desconocido():
+    import pytest
+    with pytest.raises(ValueError):
+        salary_dca.calcular_monto_a_invertir(1500, "mitad", 10)
+
+
+def test_calcular_monto_a_invertir_rechaza_sueldo_cero():
+    import pytest
+    with pytest.raises(ValueError):
+        salary_dca.calcular_monto_a_invertir(0, "porcentaje", 10)
+
+
+# ─── tool _tool_calcular_monto_a_invertir_sueldo ────────────────────────────
+
+def test_tool_monto_a_invertir_usa_modo_y_valor_explicitos():
+    resultado = salary_dca._tool_calcular_monto_a_invertir_sueldo({"monto_sueldo": 1500, "modo": "porcentaje", "valor": 10})
+    assert resultado["ok"] is True
+    assert resultado["data"]["monto_a_invertir"] == 150.0
+
+
+def test_tool_monto_a_invertir_sin_config_ni_modo_devuelve_error_claro():
+    resultado = salary_dca._tool_calcular_monto_a_invertir_sueldo({"monto_sueldo": 1500})
+    assert resultado["ok"] is False
+    assert "invertir" in resultado["error"].lower()
+
+
+def test_tool_monto_a_invertir_usa_config_guardada_si_no_se_pasa_modo():
+    database.guardar_config("DCA_SUELDO_MODO_MONTO", "fijo")
+    database.guardar_config("DCA_SUELDO_MONTO_VALOR", "300")
+    resultado = salary_dca._tool_calcular_monto_a_invertir_sueldo({"monto_sueldo": 1500})
+    assert resultado["ok"] is True
+    assert resultado["data"]["monto_a_invertir"] == 300.0
