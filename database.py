@@ -592,7 +592,7 @@ def _tool_manage_goals(inputs: dict):
 
 @tool(
     "save_config",
-    "Guarda/lee configuración (MONTO_SUELDO, PORCENTAJE_DCA, etc).",
+    "Guarda/lee configuración de clave-valor genérica (ej. DCA_SUELDO_MONTO_APROX, DCA_SUELDO_SPLIT, etc).",
     {"type": "object", "properties": {"accion": {"type": "string", "enum": ["guardar", "leer"]}, "clave": {"type": "string"}, "valor": {"type": "string"}}, "required": ["accion", "clave"]}
 )
 def _tool_save_config(inputs: dict):

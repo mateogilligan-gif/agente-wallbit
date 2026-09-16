@@ -203,6 +203,26 @@ async def chequear_sueldo_diario(context: ContextTypes.DEFAULT_TYPE):
         await _enviar_texto_largo_bot(context.bot, AUTHORIZED_USER_ID, respuesta)
 
 
+async def manejador_errores(update: object, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handler global de errores. Sin esto, si algo revienta dentro de un
+    comando/mensaje o de un job automático, python-telegram-bot lo loguea
+    internamente pero el usuario se queda sin ninguna respuesta — vio
+    "⏳ Procesando..." y ahí termina, sin enterarse de que algo falló.
+    Acá lo logueamos igual (con traceback completo en bot.log) y, si el
+    error vino de un mensaje de chat (no de un job en background, que no
+    tiene update), le avisamos al usuario en vez de dejarlo esperando.
+    """
+    logger.error("Excepción no manejada", exc_info=context.error)
+    if isinstance(update, Update) and update.effective_message:
+        try:
+            await update.effective_message.reply_text(
+                "⚠️ Ocurrió un error inesperado procesando tu mensaje. Si se repite, revisá bot.log."
+            )
+        except Exception:
+            pass  # si ni el aviso de error se puede mandar, no hay más para hacer acá
+
+
 def main():
     init_db()
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
@@ -216,6 +236,7 @@ def main():
     app.add_handler(CommandHandler("debate", debate))
     app.add_handler(CommandHandler("ayuda", ayuda))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, mensaje_libre))
+    app.add_error_handler(manejador_errores)
 
     # Verificar alertas cada 30 minutos
     app.job_queue.run_repeating(verificar_alertas_periodico, interval=1800, first=60)

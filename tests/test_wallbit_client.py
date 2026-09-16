@@ -12,6 +12,45 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import wallbit_client
 
 
+# ─── Validación local de create_trade (antes de tocar el servidor real) ────
+# Todos estos casos se cortan ANTES de llamar a _call_tool, así que corren
+# sin red — si algún día alguno empieza a intentar de verdad la llamada de
+# red, el test fallaría por timeout/conexión en vez de por el assert.
+
+def test_create_trade_rechaza_ticker_vacio():
+    resultado = wallbit_client.create_trade("", "buy", 100)
+    assert resultado["ok"] is False
+    assert "ticker" in resultado["error"].lower()
+
+
+def test_create_trade_rechaza_side_invalido():
+    resultado = wallbit_client.create_trade("AAPL", "hodl", 100)
+    assert resultado["ok"] is False
+    assert "side" in resultado["error"].lower()
+
+
+def test_create_trade_rechaza_monto_cero_o_negativo():
+    assert wallbit_client.create_trade("AAPL", "buy", 0)["ok"] is False
+    assert wallbit_client.create_trade("AAPL", "buy", -50)["ok"] is False
+
+
+def test_create_trade_rechaza_order_type_invalido():
+    resultado = wallbit_client.create_trade("AAPL", "buy", 100, order_type="stop")
+    assert resultado["ok"] is False
+    assert "order_type" in resultado["error"].lower()
+
+
+def test_create_trade_rechaza_limit_sin_precio():
+    resultado = wallbit_client.create_trade("AAPL", "buy", 100, order_type="limit")
+    assert resultado["ok"] is False
+    assert "limit" in resultado["error"].lower()
+
+
+def test_create_trade_rechaza_limit_con_precio_cero():
+    resultado = wallbit_client.create_trade("AAPL", "buy", 100, order_type="limit", price=0)
+    assert resultado["ok"] is False
+
+
 def test_parsea_formato_dict_de_tickers():
     """Formato {AAPL: {...}, MSFT: {...}}."""
     raw = '{"AAPL": {"shares": 10, "avg_cost": 150.0}, "MSFT": {"shares": 5, "avg_cost": 300.0}}'

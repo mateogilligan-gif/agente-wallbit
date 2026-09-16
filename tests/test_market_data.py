@@ -1,6 +1,7 @@
 """Tests de lógica pura en market_data.py. Sin red."""
 import sys
 import os
+from unittest.mock import patch, MagicMock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import market_data
@@ -43,3 +44,35 @@ def test_check_earnings_upcoming_estructura_vacia():
     resultado = market_data.check_earnings_upcoming([], days=14)
     assert resultado["ok"] is True
     assert resultado["data"] == []
+
+
+def test_yf_get_earnings_calendar_castea_numpy_a_float_en_rama_dict():
+    """
+    Bug real: cuando yfinance devuelve el calendar como dict (una de las dos
+    formas posibles según versión), los valores pueden venir como
+    numpy.float64 — que json.dumps no puede serializar tal cual. La rama
+    DataFrame ya casteaba con float(), esta rama no lo hacía. Se mockea
+    yfinance.Ticker (sin red real) para forzar justo la rama dict.
+    """
+    import numpy as np
+
+    cal_dict = {
+        "Earnings Date": ["2026-10-20"],
+        "Earnings Average": np.float64(2.5),
+        "Earnings Low": np.float64(2.1),
+        "Earnings High": np.float64(2.9),
+        "Revenue Average": np.float64(123456789.0),
+    }
+    ticker_falso = MagicMock()
+    ticker_falso.calendar = cal_dict
+    ticker_falso.info = {"shortName": "Falsa Corp", "trailingEps": 2.0, "forwardEps": 2.5, "currentPrice": 100.0}
+
+    with patch("yfinance.Ticker", return_value=ticker_falso):
+        resultado = market_data.yf_get_earnings_calendar("FAKE")
+
+    assert resultado["ok"] is True
+    assert isinstance(resultado["data"]["eps_estimado_avg"], float)
+    assert type(resultado["data"]["eps_estimado_avg"]) is float  # no numpy.float64
+    # Si algún valor siguiera siendo numpy.float64, json.dumps fallaría acá:
+    import json
+    json.dumps(resultado["data"])

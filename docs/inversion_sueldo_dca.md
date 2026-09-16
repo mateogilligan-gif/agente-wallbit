@@ -196,8 +196,9 @@ real, ni ejecutar ninguna orden real:
   `agente.chat` simulados — si no hay novedades no se manda mensaje, si las
   hay se manda tal cual, y la ventana de fechas se actualiza en ambos casos.
 
-`python3 -m pytest tests/ -v` — 96 tests, todos verdes (48 nuevos de esta
-feature, incluyendo el tope de 10 tickers y el cálculo de cuánto invertir).
+`python3 -m pytest tests/ -v` — 105 tests, todos verdes (48 de esta feature,
+incluyendo el tope de 10 tickers y el cálculo de cuánto invertir; los 9
+restantes son de la auditoría de código del 2026-09-16, ver `CHANGELOG.md`).
 
 ## Estado
 

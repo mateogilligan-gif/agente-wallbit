@@ -2,6 +2,35 @@
 
 Registro de las actualizaciones del bot, en orden cronológico (la más reciente arriba).
 
+## 2026-09-16 — Auditoría de código y arreglos menores
+
+Revisión completa del repo (con un segundo agente para una mirada independiente) antes de que Mateo empiece a mostrar/recomendar el bot a otras personas. Se encontraron y corrigieron los siguientes puntos — ninguno crítico de plata, pero sí de robustez y prolijidad:
+
+### Corregido
+
+- **Manejador de errores global en Telegram** (`telegram_bot.py`, `manejador_errores`): si algo falla procesando un mensaje o un job automático, antes el usuario se quedaba sin ninguna respuesta ("⏳ Procesando..." y nada más). Ahora se loguea el error completo en `bot.log` y, si vino de un mensaje de chat, se le avisa al usuario en vez de dejarlo esperando en silencio.
+- **HTML sin escapar en los reportes de research** (`research_campaigns.py`, `renderizar_html`): los títulos/URLs/fuentes de noticias externas (Brave, Google News, Reddit, StockTwits) se insertaban tal cual en el HTML local que genera el bot. Ahora se escapan con `html.escape()` antes de insertarlos — evita que un título con caracteres de HTML/JS quede interpretado en la página que Mateo abre en su navegador. De paso, se renombró una variable local `html` que tapaba el nombre del módulo recién importado.
+- **`create_trade` sin validación local** (`wallbit_client.py`): antes de tocar el servidor real de Wallbit, ahora se valida localmente que el ticker no esté vacío, que `side` sea `buy`/`sell`, que el monto sea un número positivo, que `order_type` sea `market`/`limit`, y que las órdenes LIMIT traigan un precio válido — así un dato mal formado se corta acá con un mensaje claro, en vez de depender de que Wallbit lo rechace del otro lado.
+- **Descripción desactualizada de `save_config`** (`database.py`): mencionaba claves de un esquema de config anterior (`MONTO_SUELDO`, `PORCENTAJE_DCA`) que ya no existen desde el refactor de la feature de sueldo.
+- **Tipos inconsistentes en `yf_get_earnings_calendar`** (`market_data.py`): la rama que procesa el calendario de earnings como `dict` (una de dos formas posibles según la versión de yfinance) no casteaba los valores a `float` como sí hacía la rama `DataFrame` — podían quedar como `numpy.float64`. Ahora ambas ramas castean igual.
+
+### Hallazgo señalado, no resuelto todavía
+
+- El único control real que impide que el bot ejecute una compra sin confirmación explícita es una instrucción de texto en el prompt (`PROMPT_CORE`/`PROMPT_MODULES`), no un chequeo de código. `create_trade` está disponible para el modelo en todos los mensajes (la lista `TOOLS` en `agente.py` es global, no se filtra por tema), junto con herramientas que traen texto de internet sin filtrar. Queda pendiente decidir e implementar un control de confirmación real a nivel de código antes de considerar esto completamente cerrado.
+
+### Archivos
+
+| Archivo | Cambio |
+|---|---|
+| `telegram_bot.py` | Nuevo `manejador_errores`, registrado con `add_error_handler` |
+| `research_campaigns.py` | Escapado de HTML en `renderizar_html`, variable renombrada |
+| `wallbit_client.py` | Validación local en `create_trade` |
+| `database.py` | Descripción de `save_config` actualizada |
+| `market_data.py` | Casteo a `float` consistente en `yf_get_earnings_calendar` |
+| `tests/test_wallbit_client.py`, `tests/test_research_campaigns.py`, `tests/test_market_data.py` | Tests nuevos para cada arreglo |
+
+**105 tests en total, todos pasando** (`python3 -m pytest tests/ -q`).
+
 ## 2026-09-15 — Inversión automática de sueldo (DCA con split fijo)
 
 ### Agregado

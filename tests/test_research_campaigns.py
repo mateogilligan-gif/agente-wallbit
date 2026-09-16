@@ -47,3 +47,23 @@ def test_renderizar_html_sin_hallazgos_no_rompe():
     html = research_campaigns.renderizar_html(2, "NVDA", [])
     assert "Todavía no hay hallazgos" in html
     assert "NVDA" in html
+
+
+def test_renderizar_html_escapa_titulo_de_fuente_no_confiable():
+    """
+    titulo/url/fuente vienen de internet (noticias, Reddit, StockTwits) —
+    texto que el bot no controla. Un título con HTML/JS no debería quedar
+    interpretable tal cual en la página que Mateo abre en su navegador.
+    """
+    hallazgos = [
+        ("AAPL", "2026-09-08T10:00:00", "noticia", '<script>alert(1)</script> "Apple cae"', "https://ejemplo.com/x", "Fuente \"rara\""),
+    ]
+    html = research_campaigns.renderizar_html(1, "AAPL", hallazgos)
+
+    assert "<script>alert(1)</script>" not in html
+    assert "&lt;script&gt;" in html
+
+
+def test_renderizar_html_escapa_tickers_del_titulo_de_la_pagina():
+    html = research_campaigns.renderizar_html(1, '"><script>x</script>', [])
+    assert "<script>x</script>" not in html

@@ -240,7 +240,13 @@ def yf_get_earnings_calendar(ticker: str) -> dict:
 
         result = {}
 
-        # calendar puede ser dict o DataFrame según versión de yfinance
+        # calendar puede ser dict o DataFrame según versión de yfinance. En la
+        # rama dict los valores pueden venir como numpy.float64 (no serializable
+        # por json.dumps tal cual) — castear a float() acá, igual que ya se
+        # hacía en la rama DataFrame de más abajo, para no romper la respuesta.
+        def _a_float_o_none(valor):
+            return float(valor) if valor is not None else None
+
         if isinstance(cal, dict):
             earnings_dates = cal.get("Earnings Date", [])
             if earnings_dates:
@@ -249,10 +255,10 @@ def yf_get_earnings_calendar(ticker: str) -> dict:
                 else:
                     fecha = str(earnings_dates)[:10]
                 result["fecha_earnings"] = fecha
-            result["eps_estimado_avg"] = cal.get("Earnings Average")
-            result["eps_estimado_low"] = cal.get("Earnings Low")
-            result["eps_estimado_high"] = cal.get("Earnings High")
-            result["revenue_estimado_avg"] = cal.get("Revenue Average")
+            result["eps_estimado_avg"] = _a_float_o_none(cal.get("Earnings Average"))
+            result["eps_estimado_low"] = _a_float_o_none(cal.get("Earnings Low"))
+            result["eps_estimado_high"] = _a_float_o_none(cal.get("Earnings High"))
+            result["revenue_estimado_avg"] = _a_float_o_none(cal.get("Revenue Average"))
         else:
             # DataFrame: columnas son las fechas, filas son las métricas
             try:

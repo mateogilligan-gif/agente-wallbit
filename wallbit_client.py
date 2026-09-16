@@ -119,7 +119,24 @@ def create_trade(ticker: str, side: str, amount: float, order_type: str = "marke
     """
     Ejecuta una orden. NUNCA llamar sin confirmación explícita del usuario.
     side: 'buy' o 'sell' | order_type: 'market' o 'limit'
+
+    Antes de tocar el servidor real de Wallbit, valida localmente lo básico
+    (monto positivo, ticker no vacío, precio presente en órdenes LIMIT) —
+    así un dato mal formado se corta acá con un mensaje claro, en vez de
+    mandarse tal cual a la cuenta real y depender de que Wallbit lo rechace
+    del otro lado con un error menos entendible.
     """
+    if not ticker or not isinstance(ticker, str):
+        return {"ok": False, "error": "Ticker inválido: no puede estar vacío"}
+    if side not in ("buy", "sell"):
+        return {"ok": False, "error": f"side inválido: '{side}' (tiene que ser 'buy' o 'sell')"}
+    if not isinstance(amount, (int, float)) or amount <= 0:
+        return {"ok": False, "error": f"Monto inválido: {amount} (tiene que ser un número mayor a 0)"}
+    if order_type not in ("market", "limit"):
+        return {"ok": False, "error": f"order_type inválido: '{order_type}' (tiene que ser 'market' o 'limit')"}
+    if order_type == "limit" and (price is None or price <= 0):
+        return {"ok": False, "error": "Las órdenes LIMIT necesitan un 'price' mayor a 0"}
+
     params = {
         "ticker": ticker,
         "side": side,

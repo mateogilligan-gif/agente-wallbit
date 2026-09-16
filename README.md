@@ -228,7 +228,7 @@ agente-wallbit/
 ```
 
 Cada módulo de dominio registra sus propias tools con `@tool(...)` (de
-`tool_registry.py`) junto a la lógica que ya tenía — 35 tools en total,
+`tool_registry.py`) junto a la lógica que ya tenía — 37 tools en total,
 repartidas por dominio en vez de vivir todas juntas en `agente.py`.
 `research_campaigns.py` es la excepción: no registra ninguna tool propia
 (la tool `manage_research_campaign` vive en `database.py`, que es quien

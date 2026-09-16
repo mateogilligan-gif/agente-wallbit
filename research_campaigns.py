@@ -13,6 +13,7 @@ sobre nada. La única excepción es el pulso de sentimiento social (StockTwits/
 ApeWisdom), que no tiene un "artículo" al que linkear, así que se guarda como
 una foto numérica del día en vez de un link a una noticia.
 """
+import html
 from datetime import datetime
 
 import brave_client
@@ -140,22 +141,28 @@ def renderizar_html(campana_id: int, tickers_str: str, hallazgos: list) -> str:
     for ticker, fecha, tipo, titulo, url, fuente in hallazgos:
         por_ticker.setdefault(ticker, []).append((fecha, tipo, titulo, url, fuente))
 
+    # titulo/url/fuente vienen de fuentes externas no confiables (noticias, Reddit,
+    # StockTwits) — hay que escaparlos antes de meterlos en el HTML. Si no, un
+    # título con comillas o algo tipo "<script>" quedaría interpretado tal cual
+    # en la página que Mateo abre en su navegador. tipo/fecha/ticker los define
+    # el propio bot, no hace falta escaparlos, pero no cuesta nada ser consistente.
     secciones = []
     for ticker in sorted(por_ticker.keys()):
         filas = "".join(
-            f'<tr><td>{fecha[:10]}</td><td>{tipo}</td>'
-            f'<td><a href="{url}" target="_blank" rel="noopener">{titulo}</a></td><td>{fuente}</td></tr>'
+            f'<tr><td>{html.escape(fecha[:10])}</td><td>{html.escape(tipo)}</td>'
+            f'<td><a href="{html.escape(url)}" target="_blank" rel="noopener">{html.escape(titulo)}</a></td><td>{html.escape(fuente)}</td></tr>'
             for fecha, tipo, titulo, url, fuente in por_ticker[ticker]
         )
         secciones.append(
-            f"<h2>{ticker}</h2><table><tr><th>Fecha</th><th>Tipo</th><th>Hallazgo</th><th>Fuente</th></tr>{filas}</table>"
+            f"<h2>{html.escape(ticker)}</h2><table><tr><th>Fecha</th><th>Tipo</th><th>Hallazgo</th><th>Fuente</th></tr>{filas}</table>"
         )
 
     cuerpo = "".join(secciones) if secciones else "<p>Todavía no hay hallazgos.</p>"
+    tickers_seguro = html.escape(tickers_str)
 
     return f"""<!DOCTYPE html>
 <html lang="es"><head><meta charset="utf-8">
-<title>Campaña de research #{campana_id} — {tickers_str}</title>
+<title>Campaña de research #{campana_id} — {tickers_seguro}</title>
 <style>
 body {{ font-family: -apple-system, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }}
 table {{ width: 100%; border-collapse: collapse; margin-bottom: 2rem; }}
@@ -167,7 +174,7 @@ a {{ color: #0645ad; }}
 </style></head>
 <body>
 <h1>Campaña de research #{campana_id}</h1>
-<p>Tickers: {tickers_str} — actualizado {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
+<p>Tickers: {tickers_seguro} — actualizado {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
 {cuerpo}
 </body></html>"""
 
@@ -175,11 +182,11 @@ a {{ color: #0645ad; }}
 def generar_html_campana(campana_id: int, tickers_str: str) -> str:
     """Trae los hallazgos de la DB, renderiza el HTML, y lo escribe a disco. Devuelve la ruta."""
     hallazgos = obtener_hallazgos_campana(campana_id)
-    html = renderizar_html(campana_id, tickers_str, hallazgos)
+    html_texto = renderizar_html(campana_id, tickers_str, hallazgos)
 
     CARPETA_RESEARCH.mkdir(parents=True, exist_ok=True)
     ruta = CARPETA_RESEARCH / f"campana_{campana_id}.html"
-    ruta.write_text(html, encoding="utf-8")
+    ruta.write_text(html_texto, encoding="utf-8")
     return str(ruta)
 
 
