@@ -268,3 +268,139 @@ def test_tool_monto_a_invertir_usa_config_guardada_si_no_se_pasa_modo():
     resultado = salary_dca._tool_calcular_monto_a_invertir_sueldo({"monto_sueldo": 1500})
     assert resultado["ok"] is True
     assert resultado["data"]["monto_a_invertir"] == 300.0
+
+
+# ─── dia_en_rango ────────────────────────────────────────────────────────────
+# Rango de días en que la persona suele cobrar (reemplaza al viejo "día
+# aproximado" único) — se usa para decidir cuándo vale la pena que el chequeo
+# diario llame a Wallbit, en vez de hacerlo los 365 días del año.
+
+def test_dia_en_rango_simple_sin_cruzar_fin_de_mes():
+    assert salary_dca.dia_en_rango(1, 5, 3) is True
+    assert salary_dca.dia_en_rango(1, 5, 6) is False
+    assert salary_dca.dia_en_rango(1, 5, 1) is True
+    assert salary_dca.dia_en_rango(1, 5, 5) is True
+
+
+def test_dia_en_rango_cruza_fin_de_mes():
+    # "del 28 al 3": adentro están 28, 29, 30, 31, 1, 2, 3 — afuera el resto
+    assert salary_dca.dia_en_rango(28, 3, 28) is True
+    assert salary_dca.dia_en_rango(28, 3, 31) is True
+    assert salary_dca.dia_en_rango(28, 3, 1) is True
+    assert salary_dca.dia_en_rango(28, 3, 3) is True
+    assert salary_dca.dia_en_rango(28, 3, 15) is False
+
+
+def test_dia_en_rango_funciona_igual_en_meses_de_distinta_duracion():
+    # No hay que "saber" cuántos días tiene el mes — solo importa el día de
+    # hoy. Un mes de 30 días (ej. abril) nunca va a evaluar día 31, así que
+    # el rango 28-3 se comporta igual sin ningún caso especial.
+    assert salary_dca.dia_en_rango(28, 3, 30) is True  # último día de un mes de 30
+    assert salary_dca.dia_en_rango(28, 3, 2) is True   # ya en el mes siguiente
+
+
+# ─── validar_rango_dias ──────────────────────────────────────────────────────
+
+def test_validar_rango_dias_acepta_valores_validos():
+    assert salary_dca.validar_rango_dias(28, 3) is None
+    assert salary_dca.validar_rango_dias(1, 31) is None
+
+
+def test_validar_rango_dias_rechaza_fuera_de_1_31():
+    assert salary_dca.validar_rango_dias(0, 5) is not None
+    assert salary_dca.validar_rango_dias(1, 32) is not None
+
+
+def test_validar_rango_dias_rechaza_no_enteros():
+    assert salary_dca.validar_rango_dias(1.5, 5) is not None
+    assert salary_dca.validar_rango_dias(1, "5") is not None
+
+
+# ─── hoy_esta_en_ventana_sueldo ──────────────────────────────────────────────
+
+def test_hoy_esta_en_ventana_sueldo_sin_rango_configurado_siempre_true():
+    # Si no cargó rango (ninguno de los dos), fallback conservador: chequear siempre.
+    from datetime import date
+    assert salary_dca.hoy_esta_en_ventana_sueldo(None, None, hoy=date(2026, 6, 15)) is True
+
+
+def test_hoy_esta_en_ventana_sueldo_respeta_el_rango_configurado():
+    from datetime import date
+    assert salary_dca.hoy_esta_en_ventana_sueldo(28, 3, hoy=date(2026, 6, 30)) is True
+    assert salary_dca.hoy_esta_en_ventana_sueldo(28, 3, hoy=date(2026, 6, 15)) is False
+
+
+# ─── traspaso_detectado ──────────────────────────────────────────────────────
+
+def test_traspaso_detectado_con_monto_exacto():
+    assert salary_dca.traspaso_detectado(500, 500) is True
+
+
+def test_traspaso_detectado_tolera_transferencia_de_menos_dentro_del_margen():
+    # Se avisó $500, transfirió $480 (4% menos) — sigue contando como detectado
+    assert salary_dca.traspaso_detectado(480, 500) is True
+
+
+def test_traspaso_detectado_no_cuenta_si_es_mucho_menos_de_lo_esperado():
+    # $100 no se parece en nada a los $500 esperados — no debería dispararse
+    assert salary_dca.traspaso_detectado(100, 500) is False
+
+
+def test_traspaso_detectado_false_si_no_hay_monto_esperado():
+    assert salary_dca.traspaso_detectado(500, 0) is False
+
+
+# ─── espera_vencida ──────────────────────────────────────────────────────────
+
+def test_espera_vencida_false_dentro_del_plazo():
+    from datetime import date
+    assert salary_dca.espera_vencida("2026-06-01", hoy=date(2026, 6, 5)) is False
+
+
+def test_espera_vencida_true_pasado_el_plazo():
+    from datetime import date
+    assert salary_dca.espera_vencida("2026-06-01", hoy=date(2026, 6, 20)) is True
+
+
+# ─── tool guardar_rango_dias_sueldo (usa DB temporal) ───────────────────────
+
+def test_tool_guardar_rango_dias_sueldo_guarda_ambos_valores():
+    resultado = salary_dca._tool_guardar_rango_dias_sueldo({"dia_desde": 28, "dia_hasta": 3})
+    assert resultado["ok"] is True
+    assert database.obtener_config("DCA_SUELDO_DIA_DESDE") == "28"
+    assert database.obtener_config("DCA_SUELDO_DIA_HASTA") == "3"
+
+
+def test_tool_guardar_rango_dias_sueldo_rechaza_dia_invalido():
+    resultado = salary_dca._tool_guardar_rango_dias_sueldo({"dia_desde": 40, "dia_hasta": 3})
+    assert resultado["ok"] is False
+
+
+# ─── tool iniciar_espera_traspaso_sueldo (mockea wallbit_client) ────────────
+
+def test_tool_iniciar_espera_traspaso_sueldo_guarda_monto_y_foto_de_cash():
+    from unittest.mock import patch
+    import wallbit_client
+
+    with patch.object(wallbit_client, "get_stocks_balance", return_value={"ok": True, "data": '{"cash": 120.5}'}):
+        resultado = salary_dca._tool_iniciar_espera_traspaso_sueldo({"monto_esperado": 500})
+
+    assert resultado["ok"] is True
+    assert database.obtener_config("DCA_SUELDO_MONTO_ESPERADO") == "500"
+    assert database.obtener_config("DCA_SUELDO_CASH_BASELINE") == "120.5"
+    assert database.obtener_config("DCA_SUELDO_ESPERA_DESDE")  # se guardó alguna fecha
+
+
+def test_tool_iniciar_espera_traspaso_sueldo_rechaza_monto_invalido():
+    resultado = salary_dca._tool_iniciar_espera_traspaso_sueldo({"monto_esperado": 0})
+    assert resultado["ok"] is False
+
+
+def test_tool_iniciar_espera_traspaso_sueldo_error_claro_si_no_puede_leer_cash():
+    from unittest.mock import patch
+    import wallbit_client
+
+    with patch.object(wallbit_client, "get_stocks_balance", return_value={"ok": False, "error": "timeout"}):
+        resultado = salary_dca._tool_iniciar_espera_traspaso_sueldo({"monto_esperado": 500})
+
+    assert resultado["ok"] is False

@@ -228,7 +228,7 @@ agente-wallbit/
 ```
 
 Cada módulo de dominio registra sus propias tools con `@tool(...)` (de
-`tool_registry.py`) junto a la lógica que ya tenía — 37 tools en total,
+`tool_registry.py`) junto a la lógica que ya tenía — 39 tools en total,
 repartidas por dominio en vez de vivir todas juntas en `agente.py`.
 `research_campaigns.py` es la excepción: no registra ninguna tool propia
 (la tool `manage_research_campaign` vive en `database.py`, que es quien
@@ -284,26 +284,39 @@ mis campañas de research"* (listar), *"detené la campaña #X"* (detener).
 
 ## Inversión automática de sueldo (DCA con split fijo)
 
+Wallbit no tiene API para mover plata entre la cuenta corriente y la de
+Inversión, así que ese traspaso siempre lo hace la persona a mano desde la
+app — el bot está diseñado alrededor de esa limitación, no en contra de
+ella: avisa cuánto conviene transferir y nota solo cuándo esa plata ya llegó,
+sin que haya que confirmarlo por chat.
+
 Un wizard de alta pregunta el monto aproximado del sueldo (identificador
-principal y obligatorio), el día del mes en que suele llegar (opcional,
-señal extra), si hay algún dato que identifique a quien lo transfiere en las
-transacciones o si siempre es algo genérico (esto se pregunta siempre, no se
-asume — en la cuenta de Mateo el campo "Origen" da siempre "Wallbit LLC", el
-rail, no el empleador, pero eso no es necesariamente igual para otras
-cuentas), qué % de ese sueldo invertir en el DCA o un monto fijo en dólares
-(por default NO se invierte el depósito completo, solo la porción elegida),
-qué tickers incluir (máximo 10, tope aplicado en código), y si el reparto es
-equitativo o personalizado por porcentaje. Todos los días el bot revisa las
-transacciones buscando un depósito dentro de ese rango de monto (reforzado
-por día y/o emisor si hay alguno guardado); si encuentra uno, calcula cuánto
-invertir con `calcular_monto_a_invertir_sueldo` y avisa pidiendo transferir
-solo esa porción a la cuenta de Inversión manualmente (Wallbit no tiene API
-de transferencia interna). Una vez confirmado el traspaso, el bot calcula el
-monto exacto para cada ticker con `calcular_split_sueldo` (el redondeo
-siempre lo hace código, nunca el modelo a mano) y arma el ticket. **Nunca
-ejecuta ninguna compra sin una respuesta SÍ explícita** — ni siquiera en el
-chequeo automático diario, que si no encuentra nada nuevo no manda ningún
-mensaje.
+principal y obligatorio), un **rango de días** del mes en que suele llegar
+(ej. "del 28 al 3" — no un día fijo, porque no siempre cae exacto; este
+rango es lo que le permite al chequeo diario NO revisar las transacciones
+los 365 días del año, solo dentro de esa ventana), si hay algún dato que
+identifique a quien lo transfiere en las transacciones o si siempre es algo
+genérico (esto se pregunta siempre, no se asume — en la cuenta de Mateo el
+campo "Origen" da siempre "Wallbit LLC", el rail, no el empleador, pero eso
+no es necesariamente igual para otras cuentas), qué tickers incluir (máximo
+10, tope aplicado en código), y si el reparto es equitativo o personalizado
+por porcentaje.
+
+El % o monto fijo del sueldo a invertir **no** se pregunta en el alta —se
+pregunta (o reconfirma, con opción de mantener o cambiar) cada vez que se
+detecta un sueldo nuevo, porque puede variar mes a mes. Detectado el sueldo
+dentro de la ventana de días configurada, el bot calcula cuánto invertir con
+`calcular_monto_a_invertir_sueldo` (nunca el depósito completo, salvo 100%
+explícito) y avisa el monto exacto a transferir. A partir de ahí, en vez de
+esperar que la persona confirme por chat, el chequeo diario compara el
+efectivo de la cuenta de Inversión contra una foto de ese mismo valor
+tomada al avisar — si nota que llegó una plata parecida a la esperada (con
+10% de margen, porque el traspaso es manual), arma el ticket usando el
+monto real que llegó, con `calcular_split_sueldo` (el redondeo siempre lo
+hace código, nunca el modelo a mano). Si pasan más de 10 días sin
+detectarlo, deja de chequearlo solo (se puede avisar manualmente en
+cualquier momento). **Nunca ejecuta ninguna compra sin una respuesta SÍ
+explícita** — ni siquiera en estos chequeos automáticos.
 
 Paso a paso completo: ver `docs/inversion_sueldo_dca.md`.
 
@@ -314,7 +327,7 @@ El bot corre cuatro tareas en segundo plano sin que tengas que pedirlas:
 - **Cada 30 minutos**: verifica alertas de precio de tu watchlist y notifica si alguna se disparó
 - **Todos los días a las 7am (Argentina)**: corre las campañas de research activas y avisa cuántas novedades encontró
 - **Todos los días a las 8am (Argentina)**: revisa si alguna empresa de tu portfolio reporta earnings esa semana y te avisa
-- **Todos los días a las 9am (Argentina)**: revisa si llegó un depósito que parezca sueldo; si es así, te avisa y arma el ticket de inversión (nunca ejecuta solo)
+- **Todos los días a las 9am (Argentina)**: chequea si hay un traspaso de sueldo pendiente (barato, solo llama a Wallbit si corresponde) y, si HOY cae dentro de la ventana de días configurada, revisa si llegó un depósito nuevo que parezca sueldo — nunca ejecuta una compra solo
 
 ---
 

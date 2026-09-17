@@ -1,12 +1,15 @@
 import os
 import logging
 from datetime import time as dtime, date
+from typing import Optional
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 from dotenv import load_dotenv
 from database import init_db, obtener_config, guardar_config
 import agente
 import research_campaigns
+import salary_dca
+import wallbit_client
 
 load_dotenv("config.env")
 
@@ -177,21 +180,95 @@ async def research_diario(context: ContextTypes.DEFAULT_TYPE):
     await _enviar_texto_largo_bot(context.bot, AUTHORIZED_USER_ID, texto, parse_mode="Markdown")
 
 
+def _limpiar_espera_traspaso():
+    """Borra el estado de 'esperando que llegue la plata a Inversión' (ya sea porque se detectó o porque venció el plazo)."""
+    guardar_config("DCA_SUELDO_MONTO_ESPERADO", "")
+    guardar_config("DCA_SUELDO_CASH_BASELINE", "")
+    guardar_config("DCA_SUELDO_ESPERA_DESDE", "")
+
+
+def _chequear_traspaso_pendiente() -> Optional[str]:
+    """
+    Si se está esperando un traspaso manual a la cuenta de Inversión (porque
+    ya se detectó el sueldo y se le avisó a Mateo cuánto transferir), chequea
+    si ya llegó esa plata comparando el efectivo actual contra la foto
+    guardada al empezar a esperar (ver salary_dca.iniciar_espera_traspaso_sueldo).
+
+    Devuelve None si no hay nada pendiente o todavía no llegó nada — en ese
+    caso este chequeo no le pide nada al LLM, solo lee un config y llama a
+    Wallbit una vez, así que es barato correrlo todos los días sin condición.
+    """
+    monto_esperado_raw = obtener_config("DCA_SUELDO_MONTO_ESPERADO")
+    if not monto_esperado_raw:
+        return None
+
+    desde = obtener_config("DCA_SUELDO_ESPERA_DESDE")
+    if desde and salary_dca.espera_vencida(desde):
+        _limpiar_espera_traspaso()
+        return (
+            "⌛ Hace más de 10 días que te avisé que había que transferir a la cuenta de "
+            "Inversión y no vi que haya llegado esa plata. Dejo de chequearlo automáticamente — "
+            "si ya transferiste o lo hacés más tarde, avisame vos y seguimos con la compra."
+        )
+
+    baseline_raw = obtener_config("DCA_SUELDO_CASH_BASELINE")
+    if not baseline_raw:
+        return None
+
+    stocks_res = wallbit_client.get_stocks_balance()
+    cash_actual = wallbit_client.obtener_cash_inversion(stocks_res)
+    if cash_actual is None:
+        return None  # no se pudo leer el efectivo ahora — se reintenta mañana, no es un error fatal
+
+    monto_esperado = float(monto_esperado_raw)
+    delta = cash_actual - float(baseline_raw)
+    if not salary_dca.traspaso_detectado(delta, monto_esperado):
+        return None
+
+    _limpiar_espera_traspaso()
+    contexto_extra = (
+        f"CHEQUEO_TRASPASO_SUELDO: ya se detectó que entraron ${delta:.2f} a la cuenta de Inversión "
+        f"(se había avisado transferir ${monto_esperado:.2f}). Llamá calcular_split_sueldo con "
+        f"monto_total={delta:.2f} (el monto real que llegó, no el que se avisó) y mandale el ticket "
+        f"de confirmación al usuario, esperando SÍ/NO como siempre."
+    )
+    return agente.chat("Chequeo automático de traspaso de sueldo.", contexto_extra=contexto_extra)
+
+
 async def chequear_sueldo_diario(context: ContextTypes.DEFAULT_TYPE):
     """
-    Corre una vez por día: le pide al agente (vía chat, con contexto especial
-    CHEQUEO_AUTOMATICO_SUELDO) que revise list_transactions buscando un
-    depósito nuevo que parezca sueldo desde la última corrida. La ventana de
-    fechas (DCA_SUELDO_ULTIMA_FECHA) la mueve este código, no el LLM — así el
-    "desde cuándo" es determinístico aunque la detección en sí (si ESE
-    depósito puntual parece o no un sueldo) sea juicio del modelo.
+    Corre una vez por día y hace dos chequeos independientes, cada uno solo
+    si corresponde — para no golpear la API de Wallbit sin necesidad:
 
-    Si no hay novedades, el módulo de prompt le pide al LLM que responda
-    exactamente "SIN_NOVEDADES" — para no mandar un mensaje de Telegram
-    vacío todos los días.
+    1. Traspaso pendiente (_chequear_traspaso_pendiente): barato, se corre
+       siempre. Si no hay nada pendiente, no llama a Wallbit para nada.
+    2. Sueldo nuevo: solo si HOY cae dentro del rango de días configurado
+       (DCA_SUELDO_DIA_DESDE/HASTA) — o siempre, si la persona no cargó un
+       rango — le pide al agente (vía chat, contexto CHEQUEO_AUTOMATICO_SUELDO)
+       que revise list_transactions buscando un depósito nuevo que parezca
+       sueldo desde la última corrida. La ventana de fechas
+       (DCA_SUELDO_ULTIMA_FECHA) la mueve este código, no el LLM — así el
+       "desde cuándo" es determinístico aunque la detección en sí (si ESE
+       depósito puntual parece o no un sueldo) sea juicio del modelo.
+
+    Si no hay novedades en el chequeo de sueldo, el módulo de prompt le pide
+    al LLM que responda exactamente "SIN_NOVEDADES" — para no mandar un
+    mensaje de Telegram vacío todos los días.
     """
     if not AUTHORIZED_USER_ID:
         return
+
+    respuesta_traspaso = _chequear_traspaso_pendiente()
+    if respuesta_traspaso:
+        await _enviar_texto_largo_bot(context.bot, AUTHORIZED_USER_ID, respuesta_traspaso)
+
+    dia_desde_raw = obtener_config("DCA_SUELDO_DIA_DESDE")
+    dia_hasta_raw = obtener_config("DCA_SUELDO_DIA_HASTA")
+    dia_desde = int(dia_desde_raw) if dia_desde_raw else None
+    dia_hasta = int(dia_hasta_raw) if dia_hasta_raw else None
+    if not salary_dca.hoy_esta_en_ventana_sueldo(dia_desde, dia_hasta):
+        return  # fuera de la ventana de días: no se llama a Wallbit para nada
+
     ultima_fecha = obtener_config("DCA_SUELDO_ULTIMA_FECHA") or "sin fecha previa (primera corrida, revisá todo el historial reciente)"
     contexto_extra = (
         f"CHEQUEO_AUTOMATICO_SUELDO: revisá list_transactions y fijate si hay un depósito que parezca "

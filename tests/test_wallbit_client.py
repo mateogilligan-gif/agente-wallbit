@@ -99,3 +99,38 @@ def test_saldo_normal_se_muestra_bien():
     stocks_res = {"ok": True, "data": "[]"}
     resumen = wallbit_client.format_portfolio_summary(checking_res, stocks_res)
     assert "1500.5" in resumen
+
+
+# ─── obtener_cash_inversion ─────────────────────────────────────────────────
+# Se usa para detectar cuándo la persona ya hizo el traspaso manual a la
+# cuenta de Inversión (Wallbit no tiene API de transferencias, así que esta
+# es la única forma de notarlo). El campo "cash" ya se filtraba en
+# _parse_portfolio_text para no confundirlo con un ticker falso — acá es
+# donde se usa ese valor para algo real.
+
+def test_obtener_cash_inversion_formato_simple():
+    stocks_res = {"ok": True, "data": '{"cash": 250.75, "AAPL": {"shares": 10}}'}
+    assert wallbit_client.obtener_cash_inversion(stocks_res) == 250.75
+
+
+def test_obtener_cash_inversion_prueba_claves_alternativas():
+    assert wallbit_client.obtener_cash_inversion({"ok": True, "data": '{"available_cash": 10}'}) == 10.0
+    assert wallbit_client.obtener_cash_inversion({"ok": True, "data": '{"cash_balance": 20}'}) == 20.0
+    assert wallbit_client.obtener_cash_inversion({"ok": True, "data": '{"available": 30}'}) == 30.0
+
+
+def test_obtener_cash_inversion_formato_anidado():
+    stocks_res = {"ok": True, "data": '{"data": {"cash": 99.9}}'}
+    assert wallbit_client.obtener_cash_inversion(stocks_res) == 99.9
+
+
+def test_obtener_cash_inversion_none_si_la_respuesta_es_error():
+    assert wallbit_client.obtener_cash_inversion({"ok": False, "error": "timeout"}) is None
+
+
+def test_obtener_cash_inversion_none_si_no_hay_ningun_campo_de_cash():
+    assert wallbit_client.obtener_cash_inversion({"ok": True, "data": '{"AAPL": {"shares": 10}}'}) is None
+
+
+def test_obtener_cash_inversion_none_si_no_es_json_valido():
+    assert wallbit_client.obtener_cash_inversion({"ok": True, "data": "esto no es json"}) is None

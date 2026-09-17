@@ -2,6 +2,59 @@
 
 Registro de las actualizaciones del bot, en orden cronológico (la más reciente arriba).
 
+## 2026-09-16 — Rediseño de la inversión de sueldo: detección automática del traspaso + rango de días
+
+Mateo encontró un problema real de diseño en la feature de DCA de sueldo:
+como Wallbit no tiene API para mover plata entre la cuenta corriente y la de
+Inversión, ese traspaso siempre iba a ser manual — pedirle además que
+confirme por chat "ya transferí" era un paso de más que el bot puede evitar
+detectando la llegada de esa plata solo. De esa conversación salió un
+rediseño de la feature (no un ajuste chico):
+
+### Agregado
+
+- **Detección automática del traspaso** (`wallbit_client.obtener_cash_inversion`,
+  `salary_dca.traspaso_detectado`/`espera_vencida`): el bot guarda una foto
+  del efectivo de la cuenta de Inversión al avisar cuánto transferir
+  (`salary_dca.iniciar_espera_traspaso_sueldo`), y el chequeo diario compara
+  contra esa foto para notar solo cuándo llegó la plata — con 10% de margen
+  de tolerancia (el traspaso es manual, puede no ser exacto al centavo) y un
+  tope de 10 días de espera antes de dejar de chequearlo solo. El split
+  siempre se calcula con el monto REAL que llegó, no con el teórico.
+- **Rango de días en vez de un día fijo** (`salary_dca.dia_en_rango`,
+  `hoy_esta_en_ventana_sueldo`, `validar_rango_dias`, tool
+  `guardar_rango_dias_sueldo`): el wizard ahora pide un rango (ej. "del 28
+  al 3", soporta cruzar fin de mes) en vez de un solo día aproximado. El
+  chequeo diario de sueldo nuevo solo llama a `list_transactions` si HOY
+  cae dentro de esa ventana — el resto del mes no toca la API de Wallbit
+  para nada. Sin rango configurado, sigue chequeando todos los días (mismo
+  comportamiento que antes).
+- **El % o monto fijo a invertir se pregunta en cada detección, no en el
+  alta**: si ya hay uno guardado de una vez anterior, el bot lo muestra y
+  pregunta si se mantiene o se cambia ese mes; si es la primera vez, lo
+  pregunta directamente. Esto permite ajustarlo mes a mes sin tener que
+  "reconfigurar" nada.
+
+### Corregido
+
+- El flujo anterior le pedía a la persona confirmar el traspaso por chat
+  ("ya transferí") antes de calcular el split — quedó reemplazado por la
+  detección automática de arriba (se puede seguir avisando manualmente en
+  cualquier momento, como atajo).
+
+### Archivos
+
+| Archivo | Cambio |
+|---|---|
+| `salary_dca.py` | Nuevo: `dia_en_rango`, `validar_rango_dias`, `hoy_esta_en_ventana_sueldo`, `traspaso_detectado`, `espera_vencida`; tools `guardar_rango_dias_sueldo` e `iniciar_espera_traspaso_sueldo` |
+| `wallbit_client.py` | Nuevo: `obtener_cash_inversion` (extrae el efectivo de la cuenta de Inversión de la respuesta de `get_stocks_balance`) |
+| `telegram_bot.py` | `chequear_sueldo_diario` reescrito: chequeo de traspaso pendiente (`_chequear_traspaso_pendiente`) + ventana de días para el chequeo de sueldo nuevo |
+| `agente.py` | Módulo de prompt `inversion_sueldo_dca` reescrito: wizard sin la pregunta de %, pregunta de % en cada detección, protocolo de aviso + espera automática, nuevo contexto `CHEQUEO_TRASPASO_SUELDO` |
+| `docs/inversion_sueldo_dca.md`, `README.md` | Diseño y ejemplo de conversación actualizados al flujo nuevo |
+| `tests/test_salary_dca.py`, `tests/test_wallbit_client.py`, `tests/test_telegram_bot.py`, `tests/test_agente.py` | Tests nuevos para cada pieza; se agregó un fixture en `test_telegram_bot.py` para evitar que el estado de esta feature se filtre entre archivos de test (comparten una misma DB de test) |
+
+**140 tests en total, todos pasando** (`python3 -m pytest tests/ -q`).
+
 ## 2026-09-16 — Auditoría de código y arreglos menores
 
 Revisión completa del repo (con un segundo agente para una mirada independiente) antes de que Mateo empiece a mostrar/recomendar el bot a otras personas. Se encontraron y corrigieron los siguientes puntos — ninguno crítico de plata, pero sí de robustez y prolijidad:

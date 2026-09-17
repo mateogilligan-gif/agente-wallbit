@@ -326,6 +326,54 @@ def format_portfolio_summary(checking_res: dict, stocks_res: dict) -> str:
     return "\n".join(lines)
 
 
+def obtener_cash_inversion(stocks_res: dict) -> Optional[float]:
+    """
+    Extrae el efectivo disponible (no invertido) dentro de la cuenta de
+    Inversión, a partir de la respuesta cruda de get_stocks_balance.
+
+    Wallbit no tiene una API para transferir plata entre la cuenta corriente
+    y la de inversión, así que esta es la única forma de que el bot note
+    cuándo la persona ya hizo ese traspaso a mano: comparando este valor
+    contra una foto de sí mismo tomada antes (ver salary_dca.py,
+    iniciar_espera_traspaso_sueldo / traspaso_detectado).
+
+    El campo "cash" de esta respuesta ya se venía descartando en
+    _parse_portfolio_text (CLAVES_NO_TICKER) para que no se confunda con un
+    ticker falso — acá es donde por fin se usa ese valor para algo.
+    """
+    if not stocks_res.get("ok"):
+        return None
+
+    raw = stocks_res.get("data")
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+    if not isinstance(data, dict):
+        return None
+
+    claves_cash = ("cash", "available_cash", "cash_balance", "available")
+    for clave in claves_cash:
+        if data.get(clave) is not None:
+            try:
+                return float(data[clave])
+            except (ValueError, TypeError):
+                continue
+
+    # Formato anidado, por si Wallbit lo devuelve como {"data": {...}}
+    anidado = data.get("data")
+    if isinstance(anidado, dict):
+        for clave in claves_cash:
+            if anidado.get(clave) is not None:
+                try:
+                    return float(anidado[clave])
+                except (ValueError, TypeError):
+                    continue
+
+    return None
+
+
 def get_full_portfolio() -> dict:
     """Obtiene checking + stocks. Llama ambos y devuelve juntos."""
     checking = get_checking_balance()

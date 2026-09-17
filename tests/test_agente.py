@@ -142,15 +142,34 @@ def test_modulo_sueldo_no_tiene_excepciones_a_la_confirmacion():
     assert "NO tiene excepciones" in texto  # la regla de confirmación se reafirma explícitamente
 
 
-def test_modulo_sueldo_pregunta_dia_aproximado_y_no_asume_el_emisor_de_nadie():
+def test_modulo_sueldo_pregunta_rango_de_dias_y_no_asume_el_emisor_de_nadie():
     """Guardrail de regresión: la detección por emisor ('Origen: Wallbit LLC')
     fue un hallazgo puntual de la cuenta de Mateo, no una verdad general del
     bot — el wizard tiene que preguntarle a cada usuario, no asumir la
-    respuesta de nadie más. También cubre que la fecha aproximada del sueldo
-    quedó como señal extra de refuerzo."""
+    respuesta de nadie más. También cubre que el sueldo se detecta con un
+    RANGO de días (no un solo día fijo), guardado con su propia tool para
+    que quede validado."""
     texto = agente.PROMPT_MODULES["inversion_sueldo_dca"]["texto"]
-    assert "DCA_SUELDO_DIA_APROX" in texto
+    assert "guardar_rango_dias_sueldo" in texto
     assert "no asumir la respuesta de nadie más" in texto
+
+
+def test_modulo_sueldo_activa_con_contexto_de_traspaso_detectado():
+    """El chequeo de traspaso (telegram_bot._chequear_traspaso_pendiente) manda
+    este contexto cuando ya notó que llegó la plata a la cuenta de Inversión —
+    tiene que disparar el módulo igual que el resto de los contextos automáticos."""
+    p = agente.construir_system_prompt("Chequeo automático de traspaso de sueldo.", contexto_extra="CHEQUEO_TRASPASO_SUELDO: ya se detectó...")
+    assert agente.PROMPT_MODULES["inversion_sueldo_dca"]["texto"] in p
+
+
+def test_modulo_sueldo_pregunta_porcentaje_en_cada_deteccion_no_en_el_alta():
+    """Guardrail de regresión: el % o monto fijo a invertir se pregunta CADA
+    VEZ que se detecta un sueldo (con opción de mantener o cambiar), no una
+    sola vez en el wizard de alta — así se puede ajustar mes a mes sin
+    'reconfigurar' nada."""
+    texto = agente.PROMPT_MODULES["inversion_sueldo_dca"]["texto"]
+    assert "no es una configuración fija de una sola vez" in texto
+    assert "¿Mantenemos o lo cambiamos este mes?" in texto
 
 
 def test_modulo_sueldo_avisa_el_tope_de_10_tickers():
@@ -162,11 +181,19 @@ def test_modulo_sueldo_avisa_el_tope_de_10_tickers():
 
 
 def test_modulo_sueldo_no_invierte_el_sueldo_completo_por_default():
-    """Guardrail de regresión: el bug que Mateo encontró — el wizard tiene que
-    preguntar qué % o monto fijo del sueldo invertir, y el traspaso/split se
-    calculan sobre esa porción (calcular_monto_a_invertir_sueldo), NUNCA
-    sobre el depósito completo salvo que el usuario elija 100%."""
+    """Guardrail de regresión: el bug que Mateo encontró — hay que preguntar
+    qué % o monto fijo del sueldo invertir, y el traspaso/split se calculan
+    sobre esa porción (calcular_monto_a_invertir_sueldo), nunca sobre el
+    depósito completo salvo que el usuario elija 100%."""
     texto = agente.PROMPT_MODULES["inversion_sueldo_dca"]["texto"]
     assert "calcular_monto_a_invertir_sueldo" in texto
     assert "no se invierte el sueldo completo" in texto
-    assert "NUNCA el sueldo completo" in texto
+
+
+def test_modulo_sueldo_usa_monto_real_del_traspaso_no_el_teorico():
+    """Guardrail de regresión: como el traspaso es manual, la persona puede
+    transferir un poco más o menos de lo calculado — el split SIEMPRE se arma
+    con el monto real que llegó a la cuenta de Inversión, no con el teórico."""
+    texto = agente.PROMPT_MODULES["inversion_sueldo_dca"]["texto"]
+    assert "el monto real que llegó a la cuenta de Inversión" in texto
+    assert "nunca el sueldo completo ni el monto teórico" in texto
