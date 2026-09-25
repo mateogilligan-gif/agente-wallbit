@@ -2,6 +2,28 @@
 
 Registro de las actualizaciones del bot, en orden cronológico (la más reciente arriba).
 
+## 2026-09-25 — Análisis de empresa con más rigor: framing de "jefe de equipo de analistas"
+
+Se le sumó a la sección de análisis de empresa (`PROMPT_CORE` en `agente.py`) la misma disciplina que ya usábamos en la skill de research de Mateo (`analista-financiero-broker`): pensar el análisis como si el bot fuera el jefe de un equipo de analistas de un bróker, cada sección del informe encargada a un analista distinto.
+
+### Agregado
+
+- **Verificación de ticker obligatoria** antes de investigar: confirmar con `get_asset`/`yf_info` que el ticker corresponde a la empresa correcta (evita confundir tickers parecidos de empresas distintas), chequear que siga cotizando, y aclarar si es pública o privada.
+- **Regla explícita de "nunca desde memoria"**: los datos de precio, market cap, noticias y estado de la empresa siempre se buscan en el momento, nunca se contestan de memoria.
+- **Sección de riesgos clave** (ejecución, deuda, caja/runway, dilución, riesgo regulatorio) — antes solo había un resumen numérico liviano.
+- **Competencia marcada por tipo** (pública, privada, o subsidiaria de otra empresa) en vez de solo nombrar competidores.
+- **Cierre con fuentes**, marcando explícitamente cuando un dato viene de una fuente no oficial (foro, transcripción de un inversor particular) antes de tratarlo como confirmado.
+
+### Archivos
+
+| Archivo | Cambio |
+|---|---|
+| `agente.py` | Sección "ANÁLISIS DE EMPRESA" de `PROMPT_CORE` reescrita con el framing nuevo |
+| `README.md` | Nota en "Análisis de acciones" sobre el nuevo rigor |
+| `tests/test_agente.py` | Tests nuevos: verificación de ticker, regla de "nunca desde memoria", riesgos y fuentes presentes en el prompt |
+
+**143 tests en total, todos pasando** (`python3 -m pytest tests/ -q`).
+
 ## 2026-09-16 — Rediseño de la inversión de sueldo: detección automática del traspaso + rango de días
 
 Mateo encontró un problema real de diseño en la feature de DCA de sueldo:

@@ -14,6 +14,7 @@ Usa la API pública de Wallbit + Claude (Anthropic) como cerebro + fuentes de da
 - Historial de transacciones
 
 **Análisis de acciones**
+- El agente investiga como el jefe de un equipo de analistas de un bróker: verifica que el ticker sea el correcto antes de investigar (evita confundir empresas con tickers parecidos), nunca contesta precios o noticias desde memoria (siempre busca en el momento), y cierra cada análisis con riesgos clave y fuentes citadas
 - Fundamentals completos: P/E, market cap, márgenes, crecimiento, consenso de analistas (Yahoo Finance)
 - Estado de resultados anual: ingresos, utilidad neta, EBITDA
 - Insiders: quién está comprando o vendiendo dentro de la empresa

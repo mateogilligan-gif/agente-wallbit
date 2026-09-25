@@ -101,6 +101,26 @@ def test_prompt_mensaje_generico_no_suma_modulos():
     assert p == agente.PROMPT_CORE
 
 
+# ─── Análisis de empresa — jefe de equipo de analistas ──────────────────────
+# Se sumó el framing de "analista financiero/broker" (verificación de ticker,
+# nunca desde memoria, riesgos, fuentes) que ya usábamos en la skill de
+# research de Mateo, para que el bot de Telegram investigue con el mismo
+# nivel de rigor.
+
+def test_analisis_empresa_verifica_el_ticker_antes_de_investigar():
+    assert "VERIFICAR EL TICKER" in agente.PROMPT_CORE
+    assert "get_asset" in agente.PROMPT_CORE
+
+
+def test_analisis_empresa_nunca_contesta_desde_memoria():
+    assert "nunca contestar precio, market cap, noticias o estado de una empresa desde memoria" in agente.PROMPT_CORE
+
+
+def test_analisis_empresa_pide_riesgos_y_fuentes():
+    assert "RIESGOS CLAVE" in agente.PROMPT_CORE
+    assert "FUENTES" in agente.PROMPT_CORE
+
+
 def test_prompt_suma_solo_el_modulo_con_keyword():
     p = agente.construir_system_prompt("dame un debate de AAPL")
     assert agente.PROMPT_MODULES["bull_bear"]["texto"] in p
