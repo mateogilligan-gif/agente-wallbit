@@ -23,6 +23,7 @@ import social_sentiment  # noqa: F401 — registra la tool sentimiento_social
 import reddit_client     # noqa: F401 — registra la tool reddit_sentiment (Reddit rechazó el acceso, ver apewisdom_client)
 import apewisdom_client  # noqa: F401 — registra la tool reddit_mentions_trending
 import salary_dca        # noqa: F401 — registra la tool calcular_split_sueldo
+import fmp_client        # noqa: F401 — registra noticias_empresa, screener_empresas, configurar_modo_datos_empresa
 
 
 # ─── Bull vs Bear ──────────────────────────────────────────────────────────
@@ -158,6 +159,7 @@ REGLAS:
 3. Detectar sesgos (FOMO, anclaje) y avisar.
 4. DECISION LOG: Al terminar cualquier análisis de un ticker, usar decision_log(guardar) con el veredicto (alcista/bajista/neutral) y el razonamiento en 1 línea. Al iniciar un nuevo análisis del mismo ticker, leer primero el historial para comparar si la tesis anterior fue correcta.
 5. PROFUNDIDAD: Si el mensaje dice "rápido" o "quick" → 1 brave_search + yf_info. Si dice "profundo" o "deep" → hasta 3 brave_search + yf_info + yf_financials + sec_filings. Por defecto: 1 brave_search + yf_info.
+6. DATOS DE EMPRESA (noticias por ticker): usar SIEMPRE noticias_empresa, nunca brave_search directo para esto. Si la respuesta trae "modo_no_configurado":true o un campo "aviso", preguntale a Mateo UNA sola vez qué modo prefiere (gratis/Brave vs fmp_pago/FMP — noticias confirmadas en plan Starter ~USD 19-22/mes, el screener podría necesitar un plan superior sin confirmar), guardá con configurar_modo_datos_empresa y no vuelvas a preguntar.
 
 TICKET antes de create_trade:
 Acción:[COMPRA/VENTA] Ticker:[X] Tipo:[MARKET/LIMIT] Monto:$[X] Riesgo:[X]
@@ -171,7 +173,7 @@ REGLA DE ORO: nunca contestar precio, market cap, noticias o estado de una empre
 
 1. QUÉ HACE: Explicá el producto o servicio en 2-3 líneas. Qué problema resuelve, cómo gana plata, quiénes son sus clientes.
 
-2. PRODUCTOS Y PROYECTOS: Qué está construyendo ahora. Lanzamientos recientes, roadmap, contratos importantes, partnerships. Buscá con brave_search noticias de los últimos 6 meses. Si el snippet no alcanza para entender el detalle, usá leer_pagina_web sobre la URL más relevante (máximo 2) para sacar el texto completo antes de escribir la sección.
+2. PRODUCTOS Y PROYECTOS: Qué está construyendo ahora. Lanzamientos recientes, roadmap, contratos importantes, partnerships. Usá noticias_empresa (ticker) para las noticias del ticker — no brave_search directo acá, eso queda para búsquedas abiertas que no sean de un ticker puntual (ej. tendencias del sector). Si el snippet no alcanza para entender el detalle, usá leer_pagina_web sobre la URL más relevante (máximo 2) para sacar el texto completo antes de escribir la sección.
 
 3. COMPETENCIA Y POSICIÓN: Quiénes son sus 2-3 competidores directos, marcando si son públicos, privados, o subsidiarias de una empresa más grande. Qué ventaja tiene esta empresa sobre ellos. Está ganando o perdiendo terreno.
 
@@ -231,10 +233,26 @@ Usar bull_bear_analysis. Dos llamadas separadas, argumentos opuestos, veredicto 
     "screener_tesis": {
         "keywords": ["screener", "candidatos", "penny stock", "catalizador", "ideas basadas en"],
         "texto": """SCREENER DE TESIS — cuando el usuario describa una tesis y pida ideas/candidatos (ej: "empresas de defensa con contratos nuevos", "penny stocks de biotech con catalizador cerca"):
-1. brave_search (1-2 búsquedas) para encontrar 8-15 empresas candidatas que mencionen medios o análisis recientes sobre esa tesis.
+1. Si el modo de datos de empresa es fmp_pago y la tesis define sector/industria/market cap (no un catalizador de noticias puntual), probar primero screener_empresas con esos filtros para encontrar candidatos reales — más preciso que adivinarlos. Si no da resultados, el modo es gratis, o la tesis depende de un catalizador/noticia reciente (no de sector/market cap), usar brave_search (1-2 búsquedas) para encontrar 8-15 empresas candidatas que mencionen medios o análisis recientes sobre esa tesis.
 2. Extraer los tickers de esos candidatos (si no es obvio el ticker, usar get_asset o yf_info para confirmarlo antes de pasarlo al filtro).
 3. Llamar thesis_screener con esos tickers. Definir criterios numéricos razonables según lo que pidió el usuario (si no especificó, usar defaults: min_revenue_growth 0.15, sin límite de market cap salvo que digan "chica/mediana/grande").
 4. Presentar el TOP 5 de los que cumplieron: ticker, por qué encaja con la tesis (1 línea), la métrica que lo valida, y el riesgo principal. Mencionar cuántos candidatos fueron descartados y por qué (breve)."""
+    },
+    "datos_empresa_fmp": {
+        "keywords": ["modo pago", "modo gratis", "modo fmp", "fmp pago", "pasá a modo pago", "pasa a modo pago",
+                      "volvé al gratis", "volve al gratis", "modo_no_configurado", "configurar_modo_datos_empresa",
+                      "screener de empresas", "buscar empresas por sector", "company screener"],
+        "texto": """MODO DE DATOS DE EMPRESA (gratis/Brave vs fmp_pago/FMP) — elegido por Mateo, nunca asumido.
+
+Hay dos fuentes posibles para noticias_empresa y screener_empresas:
+- 'gratis' (default si no se configuró nada): noticias vía Brave (búsqueda web genérica, con más ruido) y SIN screener real por sector/market cap.
+- 'fmp_pago': noticias estructuradas y screener real de Financial Modeling Prep. Costo: noticias confirmadas en el plan Starter (~USD 19-22/mes). El screener por sector/market cap podría necesitar un plan superior (Premium) — esto NO está confirmado todavía, decilo así de claro si Mateo pregunta por el costo del screener específicamente.
+
+PREGUNTAR UNA SOLA VEZ: si noticias_empresa devuelve "modo_no_configurado":true (o un campo "aviso" pidiendo preguntar), explicá la diferencia de arriba en 1-2 líneas y preguntale a Mateo qué modo prefiere. En cuanto responda, guardalo con configurar_modo_datos_empresa(modo) — nunca con save_config directo. No volver a preguntar en sesiones futuras salvo que Mateo quiera cambiarlo.
+
+CAMBIAR DE MODO CUANDO QUIERA: si dice algo como "pasá a modo pago", "activá FMP", "volvé al gratis", llamar configurar_modo_datos_empresa con el modo correspondiente directamente, sin tener que volver a preguntar ni repetir la explicación (salvo que la pida).
+
+SIN FMP_API_KEY: si el modo guardado es fmp_pago pero no hay FMP_API_KEY cargada en el entorno, las tools ya avisan solas (fallback a Brave en noticias, error claro en el screener) — no hace falta que vos lo detectes aparte, solo comunicá ese aviso tal cual si aparece en la respuesta."""
     },
     "research_profundo": {
         "keywords": ["metete en la web", "meterte en la web", "diario local", "diarios locales", "foro", "investigá", "investiga"],

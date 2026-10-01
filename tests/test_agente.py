@@ -182,6 +182,50 @@ def test_modulo_sueldo_activa_con_contexto_de_traspaso_detectado():
     assert agente.PROMPT_MODULES["inversion_sueldo_dca"]["texto"] in p
 
 
+# ─── Módulo de datos de empresa (modo gratis/Brave vs fmp_pago/FMP) ─────────
+
+def test_prompt_suma_modulo_datos_empresa_con_keyword_modo_pago():
+    p = agente.construir_system_prompt("pasá a modo pago")
+    assert agente.PROMPT_MODULES["datos_empresa_fmp"]["texto"] in p
+
+
+def test_prompt_suma_modulo_datos_empresa_con_keyword_screener():
+    p = agente.construir_system_prompt("dame un screener de empresas por sector")
+    assert agente.PROMPT_MODULES["datos_empresa_fmp"]["texto"] in p
+
+
+def test_prompt_mensaje_generico_no_suma_modulo_datos_empresa():
+    """'analizá NVDA' no trae ninguna keyword del módulo — por eso la regla
+    de 'preguntar una sola vez' vive TAMBIÉN en PROMPT_CORE (regla 6), no
+    solo acá, para no depender de que el mensaje mencione el modo."""
+    p = agente.construir_system_prompt("analizá NVDA")
+    assert agente.PROMPT_MODULES["datos_empresa_fmp"]["texto"] not in p
+    assert "noticias_empresa" in agente.PROMPT_CORE
+    assert "configurar_modo_datos_empresa" in agente.PROMPT_CORE
+
+
+def test_modulo_datos_empresa_pregunta_una_sola_vez():
+    texto = agente.PROMPT_MODULES["datos_empresa_fmp"]["texto"]
+    assert "UNA SOLA VEZ" in texto
+    assert "No volver a preguntar" in texto
+
+
+def test_modulo_datos_empresa_menciona_las_dos_tools():
+    texto = agente.PROMPT_MODULES["datos_empresa_fmp"]["texto"]
+    assert "noticias_empresa" in texto
+    assert "screener_empresas" in texto
+    assert "configurar_modo_datos_empresa" in texto
+
+
+def test_modulo_datos_empresa_no_afirma_costo_fijo_del_screener():
+    """Guardrail de regresión: las noticias están confirmadas en el plan
+    Starter, pero el screener podría necesitar un plan superior — el texto
+    no debe prometer el mismo costo para los dos."""
+    texto = agente.PROMPT_MODULES["datos_empresa_fmp"]["texto"]
+    assert "Starter" in texto
+    assert "no está confirmado" in texto or "NO está confirmado" in texto
+
+
 def test_modulo_sueldo_pregunta_porcentaje_en_cada_deteccion_no_en_el_alta():
     """Guardrail de regresión: el % o monto fijo a invertir se pregunta CADA
     VEZ que se detecta un sueldo (con opción de mantener o cambiar), no una

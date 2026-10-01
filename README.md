@@ -21,6 +21,7 @@ Usa la API pública de Wallbit + Claude (Anthropic) como cerebro + fuentes de da
 - Historial de dividendos
 - Filings oficiales de la SEC: 10-K, 10-Q, 8-K
 - Búsqueda de texto completo en SEC EDGAR: encuentra frases o riesgos específicos DENTRO del contenido de los filings (ej "supply chain", "customer concentration"), no solo lista qué documentos existen
+- Noticias por ticker con menos ruido y screener real de empresas por sector/industria/market cap, en un modo opcional y pago (Financial Modeling Prep) — ver sección [Datos de empresa](#datos-de-empresa-modo-gratis-vs-fmp-pago)
 
 **Earnings**
 - Earnings Calendar: próximas fechas de reporte de tu portfolio con EPS estimado del consenso
@@ -221,6 +222,7 @@ agente-wallbit/
 ├── apewisdom_client.py  # Volumen de menciones en Reddit, sin credenciales (1 tool)
 ├── research_campaigns.py # Campañas de research diario por ticker (ver sección propia)
 ├── salary_dca.py         # Split de inversión de sueldo — cálculo de montos (1 tool)
+├── fmp_client.py         # Financial Modeling Prep (opcional, pago) — noticias por ticker y screener por sector/market cap (3 tools)
 ├── telegram_bot.py      # Bot de Telegram + jobs automáticos
 ├── tests/               # Suite de tests (corre sin red, ver sección Tests)
 ├── requirements.txt     # Dependencias de Python
@@ -229,7 +231,7 @@ agente-wallbit/
 ```
 
 Cada módulo de dominio registra sus propias tools con `@tool(...)` (de
-`tool_registry.py`) junto a la lógica que ya tenía — 39 tools en total,
+`tool_registry.py`) junto a la lógica que ya tenía — 41 tools en total,
 repartidas por dominio en vez de vivir todas juntas en `agente.py`.
 `research_campaigns.py` es la excepción: no registra ninguna tool propia
 (la tool `manage_research_campaign` vive en `database.py`, que es quien
@@ -256,6 +258,7 @@ El módulo **Bull vs Bear** hace dos llamadas separadas a Claude con instruccion
 | Reddit | Discusión en subreddits financieros, rankeada por upvotes | Gratis, requiere app propia — Reddit rechazó nuestro pedido de acceso, tool queda inerte salvo que se consiga más adelante |
 | ApeWisdom | Ranking/volumen de menciones en Reddit, sin credenciales | Gratis, sin API key |
 | Stooq | Precio de respaldo, independiente de Yahoo | Gratis, sin API key |
+| Financial Modeling Prep (opcional) | Noticias por ticker + screener de empresas por sector/market cap | Opcional, modo "fmp_pago" — ver sección [Datos de empresa](#datos-de-empresa-modo-gratis-vs-fmp-pago) |
 
 ---
 
@@ -320,6 +323,49 @@ cualquier momento). **Nunca ejecuta ninguna compra sin una respuesta SÍ
 explícita** — ni siquiera en estos chequeos automáticos.
 
 Paso a paso completo: ver `docs/inversion_sueldo_dca.md`.
+
+## Datos de empresa: modo gratis vs FMP pago
+
+Las noticias por ticker (`noticias_empresa`) y el screener por sector/market
+cap (`screener_empresas`) funcionan en dos modos, elegidos por vos desde el
+chat — nunca uno fijo:
+
+- **gratis** (default si no configurás nada): noticias vía Brave Search
+  (búsqueda web genérica, con más ruido). El screener por sector/market cap
+  **no está disponible** en este modo — el bot te va a sugerir usar
+  `brave_search` + `thesis_screener` (el screener de tesis que ya existía)
+  como alternativa.
+- **fmp_pago**: noticias estructuradas y screener real de [Financial
+  Modeling Prep](https://financialmodelingprep.com). Costo: las noticias
+  están confirmadas en el plan **Starter** (~USD 19-22/mes). El screener por
+  sector/market cap **podría necesitar un plan superior (Premium, ~USD
+  49/mes)** — esto no se pudo confirmar con certeza contra la documentación
+  oficial de FMP; si tu key de Starter no tiene acceso, el bot te lo va a
+  avisar explícitamente en vez de fallar en silencio.
+
+yfinance sigue siendo la única fuente de fundamentals, precios e histórico
+en los dos modos — FMP no reemplaza nada de eso, solo cubre noticias y el
+screener.
+
+**Cómo activarlo:** cargá `FMP_API_KEY` en tu `config.env` (ver
+`config.env.example`) y decile al bot algo como *"pasá a modo pago"* o
+*"activá FMP"*. Para volver: *"volvé al modo gratis"*. Si nunca lo
+configurás, la primera vez que haga falta el bot te va a preguntar una sola
+vez qué modo preferís — después no vuelve a preguntar.
+
+**Cómo probar el modo pago cuando tengas la key** (hoy no está cargada, se
+prueba cuando te suscribas a FMP):
+1. Cargá `FMP_API_KEY=tu_key_real` en `config.env` y reiniciá el bot.
+2. Escribile *"pasá a modo pago"* — debería confirmarte que guardó `fmp_pago`.
+3. Pedile noticias de un ticker, ej *"dame noticias de AAPL"* — en la
+   respuesta debería decir que la fuente es FMP (no Brave). Si tu key no
+   tiene acceso a ese endpoint, el bot te lo va a decir explícitamente y va
+   a usar Brave como respaldo en vez de romperse.
+4. Pedile un screener, ej *"buscame empresas de Technology con market cap
+   mayor a 10000 millones"* — si tu plan no incluye el screener, el bot te
+   lo va a decir con un mensaje claro en vez de fallar.
+5. Escribile *"volvé al modo gratis"* para confirmar que el switch también
+   funciona en el otro sentido.
 
 ## Jobs automáticos
 

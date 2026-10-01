@@ -2,6 +2,78 @@
 
 Registro de las actualizaciones del bot, en orden cronológico (la más reciente arriba).
 
+## 2026-10-01 — Fuente de datos de empresa opcional y paga: Financial Modeling Prep (FMP)
+
+Las noticias por ticker vía `brave_search` son búsqueda web genérica, con
+ruido, y el bot no tenía forma de encontrar empresas por sector + market cap
+(`screener_filtrar`/`thesis_screener` solo validan una lista de tickers que
+Mateo ya trae). FMP (plan Starter, ~USD 19-22/mes) resuelve las dos cosas
+con datos estructurados, pero es pago — así que convive como un **modo**
+alternativo al gratis (Brave), elegido por Mateo desde el chat, nunca
+activado solo. Mateo todavía no tiene la API key — todo quedó probado con
+mocks, la prueba real queda pendiente para cuando se suscriba.
+
+### Agregado
+
+- **`fmp_client.py`**: cliente de FMP (HTTP + parsers + cache de 30 min,
+  mismo patrón que `brave_client.py`) y 3 tools nuevas:
+  - `noticias_empresa(ticker, limite)`: noticias por ticker — usa FMP en
+    modo `fmp_pago`, Brave (`brave_client.search_ticker_news`, sin
+    reescribir) en modo `gratis`. Misma forma normalizada en los dos casos:
+    `{titulo, url, fuente, fecha}` + `fuente_datos` ("fmp"/"brave").
+  - `screener_empresas(sector, industria, market_cap_min, market_cap_max, pais, limite)`:
+    screener real por sector/industria/market cap, solo en modo `fmp_pago`
+    (en modo gratis sugiere `brave_search` + `thesis_screener` o pasarse a
+    pago). Pide al menos un filtro — no se puede pedir "todo el mercado".
+  - `configurar_modo_datos_empresa(modo)`: guarda `MODO_DATOS_EMPRESA`
+    ("gratis" o "fmp_pago") en config, validando antes de guardar.
+- **Modo no configurado**: si nadie eligió modo todavía, `noticias_empresa`
+  usa gratis por default y agrega `"modo_no_configurado": true` + un campo
+  `"aviso"` con la instrucción explícita de preguntar — así el bot sabe que
+  tiene que preguntar aunque el mensaje del usuario no mencione el tema
+  (ej. "analizá NVDA" no dispara ningún módulo de prompt por keyword). La
+  misma regla también quedó en `PROMPT_CORE` (no depende solo del módulo).
+- **Fallbacks sin excepciones**: sin `FMP_API_KEY`, con una key sin acceso
+  al plan (error de plan/auth de FMP), o con timeout/error de red — en
+  noticias cae a Brave avisando el motivo; en el screener devuelve
+  `ok: false` con un mensaje claro. Nunca una excepción sin manejar.
+- **`PROMPT_MODULES["datos_empresa_fmp"]`**: explica la diferencia de costo
+  entre modos (noticias confirmadas en Starter, el screener podría necesitar
+  un plan superior — no confirmado), cómo cambiar de modo por chat, y que
+  no hay que volver a preguntar una vez configurado.
+- Paso 2 de "ANÁLISIS DE EMPRESA" en `PROMPT_CORE` ahora usa
+  `noticias_empresa` para las noticias del ticker (antes `brave_search`
+  directo); `brave_search` sigue para búsquedas abiertas que no son de un
+  ticker puntual. El módulo `screener_tesis` ahora prueba `screener_empresas`
+  primero cuando el modo es `fmp_pago` y la tesis define sector/market cap.
+- `config.env.example`: `FMP_API_KEY` opcional, con nota del costo.
+- `README.md`: sección nueva "Datos de empresa: modo gratis vs FMP pago"
+  (incluye paso a paso para probar el modo pago cuando llegue la key real).
+
+### Nota sobre el endpoint de noticias
+
+Endpoint de noticias por ticker: `/stable/news/stock` con el parámetro
+`symbols`, confirmado en la página oficial de la doc "Search Stock News
+API" (su ejemplo es `https://financialmodelingprep.com/stable/news/stock?symbols=AAPL`).
+"search-stock-news" es el nombre de la página de la doc, no la ruta de la
+API. Sin una key válida no se puede verificar en vivo (FMP devuelve 401
+"Invalid API KEY" para CUALQUIER ruta, exista o no), así que la prueba real
+queda pendiente de la suscripción. Las constantes `FMP_NEWS_PATH` y
+`FMP_NEWS_TICKER_PARAM` están arriba de todo en `fmp_client.py`.
+
+### Archivos
+
+| Archivo | Cambio |
+|---|---|
+| `fmp_client.py` | Nuevo — cliente FMP, 3 tools, lógica pura testeable sin red |
+| `agente.py` | Import de `fmp_client`, regla nueva en `PROMPT_CORE`, módulo `datos_empresa_fmp`, ajustes en "ANÁLISIS DE EMPRESA" y `screener_tesis` |
+| `config.env.example` | `FMP_API_KEY` opcional |
+| `README.md` | Sección "Datos de empresa", tabla de fuentes, conteo de tools (39 → 41), árbol de arquitectura |
+| `tests/test_fmp_client.py` | Nuevo — 55 tests: lógica pura, las dos tools en ambos modos, los 9 casos borde del spec |
+| `tests/test_agente.py` | Tests de regresión del módulo `datos_empresa_fmp` |
+
+**204 tests en total, todos pasando** (`python3 -m pytest tests/ -q`).
+
 ## 2026-09-25 — Análisis de empresa con más rigor: framing de "jefe de equipo de analistas"
 
 Se le sumó a la sección de análisis de empresa (`PROMPT_CORE` en `agente.py`) la misma disciplina que ya usábamos en la skill de research de Mateo (`analista-financiero-broker`): pensar el análisis como si el bot fuera el jefe de un equipo de analistas de un bróker, cada sección del informe encargada a un analista distinto.
