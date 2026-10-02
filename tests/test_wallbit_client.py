@@ -9,6 +9,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import json
 import pytest
 import wallbit_client
 
@@ -162,36 +163,48 @@ def test_saldo_normal_se_muestra_bien():
 
 # ─── obtener_cash_inversion ─────────────────────────────────────────────────
 # Los planes DCA lo usan para chequear si la plata del plan ya está en la
-# cuenta de Inversión antes de armar el ticket. El campo "cash" ya se filtraba en
-# _parse_portfolio_text para no confundirlo con un ticker falso — acá es
-# donde se usa ese valor para algo real.
+# cuenta de Inversión antes de armar el ticket. Forma real de Wallbit
+# (anonimizada): el efectivo es la fila {"symbol": "USD", "shares": <monto>}.
 
-def test_obtener_cash_inversion_formato_simple():
-    stocks_res = {"ok": True, "data": '{"cash": 250.75, "AAPL": {"shares": 10}}'}
-    assert wallbit_client.obtener_cash_inversion(stocks_res) == 250.75
-
-
-def test_obtener_cash_inversion_prueba_claves_alternativas():
-    assert wallbit_client.obtener_cash_inversion({"ok": True, "data": '{"available_cash": 10}'}) == 10.0
-    assert wallbit_client.obtener_cash_inversion({"ok": True, "data": '{"cash_balance": 20}'}) == 20.0
-    assert wallbit_client.obtener_cash_inversion({"ok": True, "data": '{"available": 30}'}) == 30.0
+RESPUESTA_REAL_ANONIMIZADA = json.dumps({"data": [
+    {"symbol": "NU", "shares": 3.5},
+    {"symbol": "ASTI", "shares": 12},
+    {"symbol": "USD", "shares": 10.22},
+    {"symbol": "UUUU", "shares": 0.41},
+]})
 
 
-def test_obtener_cash_inversion_formato_anidado():
-    stocks_res = {"ok": True, "data": '{"data": {"cash": 99.9}}'}
-    assert wallbit_client.obtener_cash_inversion(stocks_res) == 99.9
+def test_obtener_cash_inversion_lee_la_fila_usd_de_la_respuesta_real():
+    assert wallbit_client.obtener_cash_inversion({"ok": True, "data": RESPUESTA_REAL_ANONIMIZADA}) == 10.22
+
+
+def test_obtener_cash_inversion_sin_fila_usd_es_cero():
+    data = json.dumps({"data": [{"symbol": "NU", "shares": 3.5}]})
+    assert wallbit_client.obtener_cash_inversion({"ok": True, "data": data}) == 0.0
+
+
+def test_obtener_cash_inversion_acepta_la_data_ya_parseada():
+    assert wallbit_client.obtener_cash_inversion({"ok": True, "data": json.loads(RESPUESTA_REAL_ANONIMIZADA)}) == 10.22
 
 
 def test_obtener_cash_inversion_none_si_la_respuesta_es_error():
     assert wallbit_client.obtener_cash_inversion({"ok": False, "error": "timeout"}) is None
 
 
-def test_obtener_cash_inversion_none_si_no_hay_ningun_campo_de_cash():
-    assert wallbit_client.obtener_cash_inversion({"ok": True, "data": '{"AAPL": {"shares": 10}}'}) is None
+def test_obtener_cash_inversion_none_si_el_formato_no_es_el_esperado():
+    # El formato viejo que asumíamos ({"cash": ...}) nunca existió en Wallbit: no se adivina
+    assert wallbit_client.obtener_cash_inversion({"ok": True, "data": '{"cash": 250.75}'}) is None
+    assert wallbit_client.obtener_cash_inversion({"ok": True, "data": '{"data": {"cash": 99.9}}'}) is None
+
+
+def test_obtener_cash_inversion_none_si_la_fila_usd_no_tiene_monto():
+    data = json.dumps({"data": [{"symbol": "USD", "shares": None}]})
+    assert wallbit_client.obtener_cash_inversion({"ok": True, "data": data}) is None
 
 
 def test_obtener_cash_inversion_none_si_no_es_json_valido():
     assert wallbit_client.obtener_cash_inversion({"ok": True, "data": "esto no es json"}) is None
+
 
 
 # ─── list_transactions: limit redondeado hacia arriba, page y fechas ───────

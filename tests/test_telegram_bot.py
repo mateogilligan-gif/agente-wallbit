@@ -102,7 +102,7 @@ def _crear_plan(monkeypatch, dia=5, monto=100, tickers=("MELI", "NU", "AAPL")):
 def _cash(monkeypatch, valor):
     llamadas = []
     monkeypatch.setattr(planes_dca.wallbit_client, "get_stocks_balance",
-                        lambda: llamadas.append(1) or {"ok": True, "data": json.dumps({"cash": valor})})
+                        lambda: llamadas.append(1) or {"ok": True, "data": json.dumps({"data": [{"symbol": "NU", "shares": 3.5}, {"symbol": "USD", "shares": valor}]})})
     return llamadas
 
 

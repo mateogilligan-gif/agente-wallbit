@@ -2,6 +2,33 @@
 
 Registro de las actualizaciones del bot, en orden cronológico (la más reciente arriba).
 
+## 2026-10-02 — Lectura real del efectivo de la cuenta de Inversión
+
+### Corregido
+
+- **`wallbit_client.obtener_cash_inversion` nunca encontraba el efectivo**:
+  buscaba un campo `cash` que Wallbit no manda. La respuesta real de
+  `get_stocks_balance` es `{"data": [{"symbol", "shares"}, ...]}` y el
+  efectivo de Inversión es la fila `{"symbol": "USD", "shares": <monto>}`
+  (verificado con una consulta de solo lectura). Por eso el job de planes
+  DCA nunca armaba tickets: siempre entendía "no se pudo leer" y
+  reintentaba en silencio. Ahora lee la fila USD. Si la lista es válida y
+  no trae fila USD, el efectivo es 0 (se avisa la falta de plata). `None`
+  queda solo para errores o formatos inesperados.
+- Los tests usaban mocks con la forma `{"cash": ...}`, que nunca existió en
+  Wallbit. Ahora usan la forma real (anonimizada).
+
+### Nota
+
+- El MCP de Wallbit expone 14 tools, entre ellas `internal_operation`, que
+  **sí** transfiere fondos entre checking (DEFAULT) e inversión
+  (INVESTMENT). El bot no la usa ni la expone: la documentación que dice
+  que "Wallbit no tiene API para mover plata entre cuentas" quedó
+  desactualizada.
+- El plan 1 de octubre de 2026 se marcó `descartado` en la base porque
+  Mateo hizo esa compra a mano. El plan sigue activo; la próxima compra es
+  el 2026-11-02.
+
 ## 2026-10-02 — El log ya no guarda el token de Telegram ni la apikey de FMP
 
 ### Corregido (seguridad)

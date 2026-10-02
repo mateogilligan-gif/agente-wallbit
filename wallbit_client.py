@@ -412,9 +412,12 @@ def obtener_cash_inversion(stocks_res: dict) -> Optional[float]:
     el día de cada plan, si la plata ya está en la cuenta de Inversión antes
     de armar el ticket de compra.
 
-    El campo "cash" de esta respuesta ya se venía descartando en
-    _parse_portfolio_text (CLAVES_NO_TICKER) para que no se confunda con un
-    ticker falso — acá es donde por fin se usa ese valor para algo.
+    Forma real de la respuesta (verificada contra Wallbit, 2026-10-02):
+        {"data": [{"symbol": "NU", "shares": 3.1}, ..., {"symbol": "USD", "shares": 10.22}]}
+    El efectivo es la fila con symbol "USD": su "shares" es el monto en USD.
+    Si la lista es válida pero no trae fila USD, no hay efectivo (0.0) —
+    Wallbit no lista una moneda sin saldo. None solo cuando la respuesta no
+    se pudo leer (error o formato inesperado): ahí el job reintenta después.
     """
     if not stocks_res.get("ok"):
         return None
@@ -425,28 +428,17 @@ def obtener_cash_inversion(stocks_res: dict) -> Optional[float]:
     except (json.JSONDecodeError, TypeError):
         return None
 
-    if not isinstance(data, dict):
+    filas = data.get("data") if isinstance(data, dict) else None
+    if not isinstance(filas, list):
         return None
 
-    claves_cash = ("cash", "available_cash", "cash_balance", "available")
-    for clave in claves_cash:
-        if data.get(clave) is not None:
+    for fila in filas:
+        if isinstance(fila, dict) and str(fila.get("symbol", "")).upper() == "USD":
             try:
-                return float(data[clave])
+                return round(float(fila.get("shares")), 2)
             except (ValueError, TypeError):
-                continue
-
-    # Formato anidado, por si Wallbit lo devuelve como {"data": {...}}
-    anidado = data.get("data")
-    if isinstance(anidado, dict):
-        for clave in claves_cash:
-            if anidado.get(clave) is not None:
-                try:
-                    return float(anidado[clave])
-                except (ValueError, TypeError):
-                    continue
-
-    return None
+                return None
+    return 0.0
 
 
 def get_full_portfolio() -> dict:

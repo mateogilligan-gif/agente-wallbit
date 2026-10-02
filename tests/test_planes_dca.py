@@ -68,7 +68,8 @@ def _cash(monkeypatch, valor):
         llamadas.append(1)
         if valor is None:
             return {"ok": False, "error": "timeout"}
-        return {"ok": True, "data": json.dumps({"cash": valor})}
+        # forma real de Wallbit: el efectivo de Inversión es la fila "USD"
+        return {"ok": True, "data": json.dumps({"data": [{"symbol": "NU", "shares": 3.5}, {"symbol": "USD", "shares": valor}]})}
 
     monkeypatch.setattr(planes_dca.wallbit_client, "get_stocks_balance", falso)
     return llamadas
@@ -835,3 +836,12 @@ def test_borrador_abandonado_vence_y_el_si_solo_vuelve_a_comprar(monkeypatch):
 
     monkeypatch.setattr(planes_dca, "_ahora", lambda: ahora + timedelta(minutes=planes_dca.MINUTOS_BORRADOR_VIGENTE + 1))
     assert _ejecutar(1, "SÍ")["ok"]
+
+
+def test_respuesta_real_sin_fila_usd_avisa_que_falta_todo_el_monto(monkeypatch):
+    """Forma real de Wallbit sin efectivo: la lista no trae fila "USD" -> 0, no 'ilegible'."""
+    _crear(monkeypatch, date(2026, 10, 2), 5, 10, tickers=["NU", "ASTI", "UUUU"])
+    monkeypatch.setattr(planes_dca.wallbit_client, "get_stocks_balance",
+                        lambda: {"ok": True, "data": json.dumps({"data": [{"symbol": "NU", "shares": 3.5}]})})
+    mensajes = planes_dca.correr_chequeo_diario(date(2026, 10, 5))
+    assert len(mensajes) == 1 and "te faltan USD 10.00" in mensajes[0]
