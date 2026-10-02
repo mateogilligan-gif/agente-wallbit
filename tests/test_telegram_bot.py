@@ -46,6 +46,7 @@ def _limpiar_planes(monkeypatch):
     conn.execute("DELETE FROM conversaciones")
     conn.commit()
     conn.close()
+    planes_dca.limpiar_borrador()
 
     def prohibido(*a, **k):
         raise AssertionError("create_trade real llamado en un test")
@@ -93,7 +94,8 @@ class _FechaFija(date):
 
 def _crear_plan(monkeypatch, dia=5, monto=100, tickers=("MELI", "NU", "AAPL")):
     monkeypatch.setattr(planes_dca, "_hoy", lambda: date(2026, 10, 2))
-    r = planes_dca._tool_gestionar_plan_dca({"accion": "crear", "dia": dia, "monto_usd": monto, "tickers": list(tickers)})
+    with planes_dca.mensaje_real_del_usuario("GUARDAR"):
+        r = planes_dca._tool_gestionar_plan_dca({"accion": "crear", "dia": dia, "monto_usd": monto, "tickers": list(tickers)})
     assert r["ok"], r
 
 

@@ -174,6 +174,13 @@ def test_modulo_planes_dca_pide_si_plan_n_con_varios_pendientes():
     assert "Ante un SÍ sin número, NO ejecutes nada" in texto
 
 
+def test_modulo_planes_dca_guardar_es_la_unica_palabra_para_guardar():
+    texto = agente.PROMPT_MODULES["planes_dca"]["texto"]
+    assert "Respondé GUARDAR" in texto
+    assert "SÍ queda reservado EXCLUSIVAMENTE para comprar" in texto
+    assert 'Nunca pidas "sí" para guardar un plan' in texto
+
+
 def test_ya_no_existe_el_modulo_de_sueldo():
     assert "inversion_sueldo_dca" not in agente.PROMPT_MODULES
     assert not any(n in agente.TOOL_REGISTRY for n in (

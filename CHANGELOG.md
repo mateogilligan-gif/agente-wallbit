@@ -2,6 +2,31 @@
 
 Registro de las actualizaciones del bot, en orden cronológico (la más reciente arriba).
 
+## 2026-10-02 — create_trade con el schema real de Wallbit y GUARDAR para guardar planes
+
+### Corregido
+
+- **`wallbit_client.create_trade`** mandaba `ticker`, `side` ("buy"/"sell")
+  y `order_type` en minúsculas, pero el MCP de Wallbit espera `symbol`,
+  `direction` ("BUY"/"SELL") y `order_type` en mayúsculas ("MARKET"/"LIMIT").
+  Cualquier orden real iba a ser rechazada por validación. Ahora usa el
+  schema real (revisado leyendo la definición de la tool, sin ejecutar
+  ninguna orden): monto en `amount` (USD), `currency: "USD"` y, para LIMIT,
+  `limit_price` + `time_in_force` (DAY por default, o GTC; Wallbit lo exige
+  en LIMIT). STOP y STOP_LIMIT, que Wallbit acepta, se siguen rechazando
+  localmente porque el bot no los usa. La validación local se mantiene,
+  adaptada a los valores nuevos. La tool expuesta al LLM usa los nombres nuevos.
+
+### Agregado
+
+- **GUARDAR para guardar o editar un plan DCA**: `gestionar_plan_dca`
+  (crear/editar) solo guarda si el mensaje real del usuario es exactamente
+  "guardar". "SÍ" queda reservado para comprar.
+- Mientras hay un plan en creación o edición sin guardar (borrador vigente
+  30 minutos), un "SÍ" a secas no ejecuta ningún ticket pendiente: se pide
+  "SÍ plan N" o GUARDAR. Cierra por código el cruce de un "sí" dicho para
+  guardar un plan que terminaba comprando otro.
+
 ## 2026-10-02 — Planes DCA programados reemplazan la inversión automática de sueldo
 
 La inversión automática de sueldo dependía de detectar el depósito del

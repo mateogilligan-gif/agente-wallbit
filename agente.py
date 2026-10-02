@@ -271,13 +271,15 @@ Usar manage_research_campaign(crear, tickers=[...], dias=N, default 30). Aclarar
     "planes_dca": {
         "keywords": ["dca", "compra recurrente", "compras recurrentes", "compra programada", "compras programadas",
                      "plan de inversión", "plan de inversion", "mis planes",
-                     "plan 1", "plan 2", "plan 3", "plan 4", "plan 5", "planes_dca_pendientes"],
+                     "plan 1", "plan 2", "plan 3", "plan 4", "plan 5", "guardar", "planes_dca_pendientes"],
         "texto": """PLANES DCA PROGRAMADOS — compra fija el día X de cada mes, con la plata que ya está en la cuenta de Inversión. DCA es disciplina, NO análisis.
 
 SIN RESEARCH: en este flujo NO se usa la estructura de ANÁLISIS DE EMPRESA, ni noticias_empresa, ni brave_search, ni decision_log, ni yf_info, y NO se sugieren cambios de tickers, montos ni timing. No opinar sobre si es buen momento para comprar. Solo armar el plan, mostrar el ticket y pedir confirmación.
 
-CREAR UN PLAN: preguntar día del mes (1-31), monto fijo en USD, tickers y si el reparto es en partes iguales o con % personalizado (nombre opcional). Llamar gestionar_plan_dca(accion='previsualizar', ...) — valida todo por código (tickers con get_asset, mínimo de USD 1 por orden, máximo 5 planes y 10 tickers). Si devuelve error, transmitirlo tal cual y pedir el dato corregido. Si está ok, mostrar el "resumen" y la "primera_compra" y preguntar si se guarda. Solo con confirmación, gestionar_plan_dca(accion='crear', mismos datos). Guardar un plan no compra nada.
-Editar, pausar, reactivar, borrar o listar: gestionar_plan_dca con esa acción. Nunca calcular montos ni fechas a mano: usar lo que devuelve la tool.
+CREAR UN PLAN: preguntar día del mes (1-31), monto fijo en USD, tickers y si el reparto es en partes iguales o con % personalizado (nombre opcional). Llamar gestionar_plan_dca(accion='previsualizar', ...) — valida todo por código (tickers con get_asset, mínimo de USD 1 por orden, máximo 5 planes y 10 tickers). Si devuelve error, transmitirlo tal cual y pedir el dato corregido. Si está ok, mostrar el "resumen" y la "primera_compra" y terminar con: "Respondé GUARDAR para guardar el plan." Solo cuando el usuario responda GUARDAR, gestionar_plan_dca(accion='crear', mismos datos). Guardar un plan no compra nada.
+EDITAR: mismo criterio — gestionar_plan_dca(accion='editar') sin GUARDAR devuelve el resumen nuevo sin guardar; mostrarlo y pedir "Respondé GUARDAR".
+GUARDAR vs SÍ: GUARDAR es la ÚNICA palabra para guardar o editar un plan. SÍ queda reservado EXCLUSIVAMENTE para comprar. Nunca pidas "sí" para guardar un plan. Si durante la creación o edición responde "sí", no guardes ni compres: pedile que responda GUARDAR (o "SÍ plan N" si lo que quiere es comprar un ticket pendiente). El código lo verifica igual.
+Pausar, reactivar, borrar o listar: gestionar_plan_dca con esa acción. Nunca calcular montos ni fechas a mano: usar lo que devuelve la tool.
 
 EL DÍA DEL PLAN: el job diario arma el ticket por código y lo manda solo — vos no armás tickets de planes. Cuando el contexto trae PLANES_DCA_PENDIENTES, el usuario está respondiendo a esos tickets:
 - La regla 1 (create_trade solo con SÍ/CONFIRMO explícito) NO tiene excepciones acá. Para comprar un plan usar SOLO ejecutar_plan_dca(numero), nunca create_trade directo.

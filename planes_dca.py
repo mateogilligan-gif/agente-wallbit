@@ -28,7 +28,7 @@ import contextvars
 import json
 import re
 import unicodedata
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 import database
@@ -53,6 +53,18 @@ MINIMO_POR_ORDEN_USD = 1.0
 # un plan: con cualquiera de estos el job no vuelve a armar ticket ese mes.
 # 'sin_fondos' NO está: es el aviso de falta de plata, y se sigue reintentando.
 ESTADOS_CERRADOS = {"pendiente", "ejecutando", "ejecutado", "descartado"}
+
+# Palabra exacta para guardar un plan nuevo o una edición. "SÍ" queda
+# reservado exclusivamente para comprar: así un "sí" durante la creación de
+# un plan nunca se confunde con la confirmación de un ticket pendiente.
+PALABRA_GUARDAR = "guardar"
+
+# Mientras haya un plan en creación/edición (un resumen mostrado y todavía
+# sin GUARDAR), un "SÍ" a secas no compra: se pide "SÍ plan N". El borrador
+# vence solo después de estos minutos, para no bloquear el "SÍ" para siempre
+# si la persona abandona la creación a mitad de camino.
+MINUTOS_BORRADOR_VIGENTE = 30
+CLAVE_BORRADOR = "DCA_PLAN_EN_EDICION_DESDE"
 
 
 # ─── Split (reparto entre tickers) ─────────────────────────────────────────
@@ -514,6 +526,34 @@ def mensaje_usuario_actual() -> Optional[str]:
     return _mensaje_usuario_real.get()
 
 
+def _ahora() -> datetime:
+    """Función aparte para poder fijarla en los tests."""
+    return datetime.now()
+
+
+def marcar_borrador_en_curso():
+    database.guardar_config(CLAVE_BORRADOR, _ahora().isoformat())
+
+
+def limpiar_borrador():
+    database.guardar_config(CLAVE_BORRADOR, "")
+
+
+def borrador_vigente() -> bool:
+    desde = database.obtener_config(CLAVE_BORRADOR)
+    if not desde:
+        return False
+    try:
+        return _ahora() - datetime.fromisoformat(desde) <= timedelta(minutes=MINUTOS_BORRADOR_VIGENTE)
+    except ValueError:
+        return False
+
+
+def es_palabra_guardar(texto: Optional[str]) -> bool:
+    """Matching estricto, igual que la confirmación de compra: solo 'guardar' (normalizado)."""
+    return isinstance(texto, str) and normalizar_texto(texto) == PALABRA_GUARDAR
+
+
 _PATRON_CONFIRMACION = re.compile(r"^(si|confirmo)(?: plan (\d+))?$")
 
 
@@ -538,8 +578,12 @@ def parsear_confirmacion(texto: Optional[str]) -> Optional[dict]:
     return {"numero": int(m.group(2)) if m.group(2) else None}
 
 
-def validar_confirmacion(texto_usuario: Optional[str], numero: int, numeros_pendientes: list) -> Optional[str]:
-    """Devuelve None si el texto confirma la ejecución del plan 'numero', o el motivo del rechazo."""
+def validar_confirmacion(texto_usuario: Optional[str], numero: int, numeros_pendientes: list, hay_borrador: bool = False) -> Optional[str]:
+    """
+    Devuelve None si el texto confirma la ejecución del plan 'numero', o el
+    motivo del rechazo. Con un plan en creación/edición (hay_borrador), un
+    SÍ sin número es ambiguo aunque haya un solo ticket pendiente.
+    """
     if texto_usuario is None:
         return "Un plan solo se ejecuta como respuesta directa a un mensaje real del usuario por Telegram — no desde un job ni un comando."
     conf = parsear_confirmacion(texto_usuario)
@@ -547,6 +591,9 @@ def validar_confirmacion(texto_usuario: Optional[str], numero: int, numeros_pend
         si = instruccion_respuesta(numero, len(numeros_pendientes))[0]
         return f"El mensaje del usuario no es una confirmación válida. Para comprar tiene que responder exactamente '{si}'."
     if conf["numero"] is None:
+        if hay_borrador:
+            return (f"Hay un plan en creación o edición sin guardar, así que un SÍ solo es ambiguo. "
+                    f"Para guardar el plan tiene que responder GUARDAR; para comprar el ticket pendiente, 'SÍ plan {numero}'.")
         if len(numeros_pendientes) > 1:
             lista = ", ".join(f"'SÍ plan {n}'" for n in numeros_pendientes)
             return f"Hay {len(numeros_pendientes)} tickets pendientes: un SÍ solo es ambiguo. Pedile que responda {lista}."
@@ -649,11 +696,17 @@ def _accion_crear(inputs: dict, guardar: bool):
         "arranca_en": desde,
         "primera_compra": fecha_programada(dia, *map(int, desde.split("-"))).isoformat(),
     }
-    if not guardar:
-        datos["siguiente_paso"] = "Mostrale el resumen al usuario y pedile confirmación. Solo si confirma, llamá gestionar_plan_dca(accion='crear') con los mismos datos."
+    if not guardar or not es_palabra_guardar(mensaje_usuario_actual()):
+        marcar_borrador_en_curso()
+        datos["guardado"] = False
+        datos["siguiente_paso"] = (
+            "NO se guardó. Mostrale el resumen y pedile que responda exactamente GUARDAR para guardarlo "
+            "(un 'sí' no guarda: SÍ es solo para comprar). Cuando responda GUARDAR, llamá gestionar_plan_dca(accion='crear') con los mismos datos."
+        )
         return {"ok": True, "data": datos}
 
     database.crear_plan_dca(numero, nombre, dia, float(monto), json.dumps(split), desde)
+    limpiar_borrador()
     datos["guardado"] = True
     return {"ok": True, "data": datos}
 
@@ -683,18 +736,28 @@ def _accion_editar(inputs: dict):
     # mismo criterio que al crear. Si el plan ya se compró este mes, ese mes
     # queda cerrado y el cambio aplica desde el siguiente.
     desde = max(plan["desde_periodo"], primer_periodo_desde(dia, hoy)) if dia != plan["dia"] else plan["desde_periodo"]
+    if not es_palabra_guardar(mensaje_usuario_actual()):
+        marcar_borrador_en_curso()
+        return {"ok": True, "data": {
+            "guardado": False,
+            "resumen_nuevo": resumen_plan(plan["numero"], nombre, dia, monto, split),
+            "siguiente_paso": ("NO se guardó. Mostrale el resumen nuevo y pedile que responda exactamente GUARDAR "
+                               "(un 'sí' no guarda: SÍ es solo para comprar). Cuando responda GUARDAR, llamá de nuevo "
+                               "gestionar_plan_dca(accion='editar') con los mismos cambios."),
+        }}
     database.borrar_ejecuciones_abiertas_dca(plan["id"])  # un ticket pendiente con los datos viejos se descarta
     database.actualizar_plan_dca(plan["numero"], nombre=nombre, dia=dia, monto_usd=float(monto),
                                  split_json=json.dumps(split), desde_periodo=desde)
+    limpiar_borrador()
     plan_nuevo = database.obtener_plan_dca(plan["numero"])
-    return {"ok": True, "data": {**_plan_para_mostrar(plan_nuevo, database.obtener_ejecuciones_dca(), hoy), "editado": True}}
+    return {"ok": True, "data": {**_plan_para_mostrar(plan_nuevo, database.obtener_ejecuciones_dca(), hoy), "guardado": True}}
 
 
 @tool(
     "gestionar_plan_dca",
     "Planes de DCA programados (compra fija el día X de cada mes, sin research). Acciones: "
     "'previsualizar' (valida día, monto, tickers con get_asset y mínimo de USD 1 por orden, y devuelve el resumen SIN guardar — usar SIEMPRE antes de crear), "
-    "'crear' (solo después de que el usuario confirmó el resumen), 'listar', 'editar' (numero + campos a cambiar), "
+    "'crear' y 'editar' (numero + campos a cambiar) solo guardan si el mensaje del usuario es exactamente GUARDAR — si no, devuelven el resumen sin guardar; 'listar', "
     "'pausar', 'reactivar', 'borrar' (numero), 'descartar_ticket' (numero — cuando el usuario responde NO al ticket del mes). "
     "Reparto: 'tickers' sin % = partes iguales; 'split' con % = personalizado. Máximo 5 planes y 10 tickers por plan.",
     {
@@ -790,7 +853,7 @@ def _tool_ejecutar_plan_dca(inputs: dict):
     if actual is None:
         return {"ok": False, "error": f"El plan {numero} no tiene un ticket pendiente para este mes (puede que ya se haya ejecutado, descartado o vencido). No se compró nada."}
 
-    error = validar_confirmacion(texto_usuario, numero, numeros_pendientes)
+    error = validar_confirmacion(texto_usuario, numero, numeros_pendientes, hay_borrador=borrador_vigente())
     if error:
         return {"ok": False, "error": error + " No se compró nada."}
 
@@ -802,7 +865,7 @@ def _tool_ejecutar_plan_dca(inputs: dict):
     asignaciones = calcular_montos(e["monto_usd"], parsear_split_json(e["split_json"]))
     resultados = []
     for a in asignaciones:
-        res = wallbit_client.create_trade(ticker=a["ticker"], side="buy", amount=a["monto"], order_type="market")
+        res = wallbit_client.create_trade(symbol=a["ticker"], direction="BUY", amount=a["monto"], order_type="MARKET")
         resultados.append({"ticker": a["ticker"], "monto": a["monto"], "ok": bool(res.get("ok")),
                            "detalle": res.get("data") if res.get("ok") else res.get("error")})
 

@@ -124,9 +124,26 @@ responde un "SÍ" y se activa el módulo de prompt.
 - "NO" llama a `gestionar_plan_dca(accion='descartar_ticket')`. Ese mes se
   saltea y el plan sigue activo para el siguiente.
 
+## GUARDAR para guardar, SÍ solo para comprar
+
+- `gestionar_plan_dca` con `crear` o `editar` solo guarda si el mensaje
+  real del usuario de ese turno es exactamente `guardar`. Usa el mismo
+  matching estricto y el mismo mecanismo de mensaje real que la compra. Si
+  no, devuelve el resumen sin guardar y le pide al bot que muestre
+  "Respondé GUARDAR".
+- "SÍ" queda reservado para comprar. Para que un "sí" dicho durante la
+  creación no confirme por error un ticket pendiente, `previsualizar` (o un
+  crear/editar sin GUARDAR) deja registrado un **borrador en curso**
+  (config `DCA_PLAN_EN_EDICION_DESDE`). Mientras el borrador está vigente,
+  `ejecutar_plan_dca` rechaza un SÍ sin número, aunque haya un solo ticket,
+  y pide "SÍ plan N" o GUARDAR.
+- El borrador se limpia al guardar. Si la creación se abandona, vence solo
+  a los 30 minutos (`MINUTOS_BORRADOR_VIGENTE`).
+- "GUARDAR" nunca compra: no es una confirmación válida para `ejecutar_plan_dca`.
+
 ## Editar, pausar y borrar
 
-- **Editar** vuelve a validar todo: tickers con `get_asset`, mínimo de
+- **Editar** pide GUARDAR igual que crear y vuelve a validar todo: tickers con `get_asset`, mínimo de
   USD 1 por orden. Si había un ticket pendiente con los datos viejos, se
   descarta y el job arma uno nuevo. Si el plan ya se ejecutó este mes, el
   cambio aplica desde el mes siguiente.
@@ -142,9 +159,13 @@ responde un "SÍ" y se activa el módulo de prompt.
 
 > **Mateo:** armame un plan de DCA el día 5 con USD 100 en MELI, NU y AAPL en partes iguales
 >
-> **Bot:** *(llama `gestionar_plan_dca(previsualizar)`)* Plan 1: día 5, USD 100.00, MELI 33.33% / NU 33.33% / AAPL 33.34%. Primera compra: 05/10/2026 (USD 33.33 / 33.33 / 33.34). ¿Lo guardo?
+> **Bot:** *(llama `gestionar_plan_dca(previsualizar)`)* Plan 1: día 5, USD 100.00, MELI 33.33% / NU 33.33% / AAPL 33.34%. Primera compra: 05/10/2026 (USD 33.33 / 33.33 / 33.34). Respondé GUARDAR para guardar el plan.
 >
 > **Mateo:** sí
+>
+> **Bot:** Para guardar el plan respondé GUARDAR ("sí" queda reservado para confirmar compras).
+>
+> **Mateo:** GUARDAR
 >
 > **Bot:** *(llama `gestionar_plan_dca(crear)`)* Listo, guardé el plan 1. Guardarlo no compra nada: el 5 te llega el ticket.
 

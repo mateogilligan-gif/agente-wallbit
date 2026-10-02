@@ -38,6 +38,7 @@ def _limpiar_planes(monkeypatch):
     conn.execute("DELETE FROM ejecuciones_dca")
     conn.commit()
     conn.close()
+    planes_dca.limpiar_borrador()
 
     def prohibido(*a, **k):
         raise AssertionError("create_trade real llamado en un test")
@@ -82,15 +83,21 @@ def _crear(monkeypatch, hoy, dia, monto, tickers=None, split=None, nombre=None):
         inputs["split"] = split
     if nombre:
         inputs["nombre"] = nombre
-    return planes_dca._tool_gestionar_plan_dca(inputs)
+    with planes_dca.mensaje_real_del_usuario("GUARDAR"):
+        return planes_dca._tool_gestionar_plan_dca(inputs)
+
+
+def _editar(**cambios):
+    with planes_dca.mensaje_real_del_usuario("GUARDAR"):
+        return planes_dca._tool_gestionar_plan_dca({"accion": "editar", **cambios})
 
 
 def _trades_falsos(monkeypatch, fallan=()):
     ordenes = []
 
-    def falso(ticker, side, amount, order_type="market", price=None):
-        ordenes.append({"ticker": ticker, "side": side, "amount": amount, "order_type": order_type})
-        if ticker in fallan:
+    def falso(symbol, direction, amount, order_type="MARKET", limit_price=None, time_in_force=None):
+        ordenes.append({"ticker": symbol, "direction": direction, "amount": amount, "order_type": order_type})
+        if symbol in fallan:
             return {"ok": False, "error": "⚠️ ERROR WALLBIT: rechazada"}
         return {"ok": True, "data": "orden ok"}
 
@@ -371,7 +378,7 @@ def test_monto_por_ticker_menor_a_1_usd_se_rechaza_al_crear_con_el_calculo(monke
 
 def test_monto_por_ticker_menor_a_1_usd_se_rechaza_al_editar(monkeypatch):
     _crear(monkeypatch, date(2026, 10, 2), 5, 30, tickers=["MELI", "NU", "AAPL"])
-    r = planes_dca._tool_gestionar_plan_dca({"accion": "editar", "numero": 1, "monto_usd": 2.5})
+    r = _editar(numero=1, monto_usd=2.5)
     assert not r["ok"] and "mínimo" in r["error"]
     assert database.obtener_plan_dca(1)["monto_usd"] == 30
 
@@ -389,7 +396,7 @@ def test_ticker_inexistente_al_crear_no_guarda(monkeypatch):
 
 def test_ticker_inexistente_al_editar_no_guarda(monkeypatch):
     _crear(monkeypatch, date(2026, 10, 2), 5, 100, tickers=["MELI"])
-    r = planes_dca._tool_gestionar_plan_dca({"accion": "editar", "numero": 1, "tickers": ["NOEXISTE"]})
+    r = _editar(numero=1, tickers=["NOEXISTE"])
     assert not r["ok"]
     assert "MELI" in database.obtener_plan_dca(1)["split_json"]
 
@@ -586,8 +593,8 @@ def test_si_ejecuta_una_orden_market_por_ticker(monkeypatch):
     ordenes = _trades_falsos(monkeypatch)
     r = _ejecutar(1, "SÍ")
     assert r["ok"]
-    assert [(o["ticker"], o["amount"], o["side"], o["order_type"]) for o in ordenes] == [
-        ("MELI", 33.33, "buy", "market"), ("NU", 33.33, "buy", "market"), ("AAPL", 33.34, "buy", "market")]
+    assert [(o["ticker"], o["amount"], o["direction"], o["order_type"]) for o in ordenes] == [
+        ("MELI", 33.33, "BUY", "MARKET"), ("NU", 33.33, "BUY", "MARKET"), ("AAPL", 33.34, "BUY", "MARKET")]
     assert r["data"]["fallidas"] == []
     assert database.obtener_ejecuciones_dca()[0]["estado"] == "ejecutado"
 
@@ -688,7 +695,7 @@ def test_editar_plan_ya_ejecutado_este_mes_aplica_desde_el_siguiente(monkeypatch
     _plan_con_ticket(monkeypatch)
     _trades_falsos(monkeypatch)
     _ejecutar(1, "SÍ")
-    r = planes_dca._tool_gestionar_plan_dca({"accion": "editar", "numero": 1, "monto_usd": 200})
+    r = _editar(numero=1, monto_usd=200)
     assert r["ok"]
     assert planes_dca.correr_chequeo_diario(date(2026, 10, 6)) == []  # octubre ya está cerrado
     mensajes = planes_dca.correr_chequeo_diario(date(2026, 11, 5))
@@ -697,7 +704,7 @@ def test_editar_plan_ya_ejecutado_este_mes_aplica_desde_el_siguiente(monkeypatch
 
 def test_editar_con_ticket_pendiente_lo_reemplaza_con_los_datos_nuevos(monkeypatch):
     _plan_con_ticket(monkeypatch)
-    planes_dca._tool_gestionar_plan_dca({"accion": "editar", "numero": 1, "monto_usd": 60})
+    _editar(numero=1, monto_usd=60)
     ordenes = _trades_falsos(monkeypatch)
     assert not _ejecutar(1, "SÍ")["ok"]  # el ticket viejo de USD 100 ya no existe
     mensajes = planes_dca.correr_chequeo_diario(date(2026, 10, 6))
@@ -723,3 +730,108 @@ def test_contexto_tickets_pendientes(monkeypatch):
     ctx = planes_dca.contexto_tickets_pendientes(date(2026, 10, 5))
     assert ctx.startswith("PLANES_DCA_PENDIENTES")
     assert "plan 1" in ctx and "plan 2" in ctx and "SÍ plan N" in ctx
+
+
+# ─── GUARDAR para guardar, SÍ solo para comprar ─────────────────────────────
+
+def _crear_con_texto(monkeypatch, texto, hoy=date(2026, 10, 2), dia=20, monto=50, tickers=("NU", "CRML", "AXTI")):
+    _fijar_hoy(monkeypatch, hoy)
+    inputs = {"accion": "crear", "dia": dia, "monto_usd": monto, "tickers": list(tickers)}
+    with planes_dca.mensaje_real_del_usuario(texto):
+        return planes_dca._tool_gestionar_plan_dca(inputs)
+
+
+@pytest.mark.parametrize("texto", ["GUARDAR", "guardar", "Guardar.", "  GUARDAR!  "])
+def test_es_palabra_guardar_acepta_solo_guardar(texto):
+    assert planes_dca.es_palabra_guardar(texto)
+
+
+@pytest.mark.parametrize("texto", ["sí", "si", "dale", "guardar el plan", "guardalo", "no guardar", "", None])
+def test_es_palabra_guardar_rechaza_todo_lo_demas(texto):
+    assert not planes_dca.es_palabra_guardar(texto)
+
+
+def test_crear_con_si_no_guarda_y_pide_guardar(monkeypatch):
+    r = _crear_con_texto(monkeypatch, "sí")
+    assert r["ok"] and r["data"]["guardado"] is False
+    assert "GUARDAR" in r["data"]["siguiente_paso"]
+    assert database.obtener_planes_dca() == []
+
+
+def test_crear_fuera_de_un_mensaje_real_no_guarda(monkeypatch):
+    _fijar_hoy(monkeypatch, date(2026, 10, 2))
+    r = planes_dca._tool_gestionar_plan_dca({"accion": "crear", "dia": 5, "monto_usd": 100, "tickers": ["MELI"]})
+    assert r["data"]["guardado"] is False
+    assert database.obtener_planes_dca() == []
+
+
+def test_crear_con_guardar_guarda(monkeypatch):
+    r = _crear_con_texto(monkeypatch, "Guardar")
+    assert r["data"]["guardado"] is True
+    assert len(database.obtener_planes_dca()) == 1
+    assert not planes_dca.borrador_vigente()
+
+
+def test_editar_con_si_no_cambia_nada(monkeypatch):
+    _crear(monkeypatch, date(2026, 10, 2), 5, 100, tickers=["MELI"])
+    with planes_dca.mensaje_real_del_usuario("sí"):
+        r = planes_dca._tool_gestionar_plan_dca({"accion": "editar", "numero": 1, "monto_usd": 300})
+    assert r["ok"] and r["data"]["guardado"] is False
+    assert "USD 300.00" in r["data"]["resumen_nuevo"]
+    assert database.obtener_plan_dca(1)["monto_usd"] == 100
+
+
+def test_cruce_si_con_plan_en_creacion_y_ticket_pendiente_no_guarda_ni_compra(monkeypatch):
+    _plan_con_ticket(monkeypatch, tickers=("MELI",))         # plan 1 con ticket pendiente
+    _fijar_hoy(monkeypatch, date(2026, 10, 5))
+    planes_dca._tool_gestionar_plan_dca({"accion": "previsualizar", "dia": 20, "monto_usd": 50, "tickers": ["NU", "CRML", "AXTI"]})
+    ordenes = _trades_falsos(monkeypatch)
+
+    # el usuario responde "sí" al resumen del plan nuevo
+    r_crear = _crear_con_texto(monkeypatch, "sí", hoy=date(2026, 10, 5))
+    r_ejecutar = _ejecutar(1, "sí")
+
+    assert r_crear["data"]["guardado"] is False
+    assert len(database.obtener_planes_dca()) == 1          # el plan nuevo no se guardó
+    assert not r_ejecutar["ok"] and "GUARDAR" in r_ejecutar["error"] and "SÍ plan 1" in r_ejecutar["error"]
+    assert ordenes == []                                     # y no se compró nada
+
+    # con la palabra explícita sí compra
+    assert _ejecutar(1, "SÍ plan 1")["ok"]
+    assert [o["ticker"] for o in ordenes] == ["MELI"]
+
+
+def test_cruce_guardar_con_ticket_pendiente_guarda_y_no_compra(monkeypatch):
+    _plan_con_ticket(monkeypatch, tickers=("MELI",))
+    _fijar_hoy(monkeypatch, date(2026, 10, 5))
+    planes_dca._tool_gestionar_plan_dca({"accion": "previsualizar", "dia": 20, "monto_usd": 50, "tickers": ["NU", "CRML", "AXTI"]})
+    ordenes = _trades_falsos(monkeypatch)
+
+    assert not _ejecutar(1, "GUARDAR")["ok"]                 # GUARDAR nunca compra
+    r = _crear_con_texto(monkeypatch, "GUARDAR", hoy=date(2026, 10, 5))
+    assert r["data"]["guardado"] is True
+    assert len(database.obtener_planes_dca()) == 2
+    assert ordenes == []
+    assert database.obtener_ejecuciones_dca()[0]["estado"] == "pendiente"  # el ticket sigue esperando su SÍ
+
+
+def test_despues_de_guardar_el_si_solo_vuelve_a_comprar(monkeypatch):
+    _plan_con_ticket(monkeypatch, tickers=("MELI",))
+    _fijar_hoy(monkeypatch, date(2026, 10, 5))
+    planes_dca._tool_gestionar_plan_dca({"accion": "previsualizar", "dia": 20, "monto_usd": 50, "tickers": ["NU"]})
+    _crear_con_texto(monkeypatch, "GUARDAR", hoy=date(2026, 10, 5), tickers=("NU",))
+    _trades_falsos(monkeypatch)
+    assert _ejecutar(1, "SÍ")["ok"]
+
+
+def test_borrador_abandonado_vence_y_el_si_solo_vuelve_a_comprar(monkeypatch):
+    from datetime import datetime, timedelta
+    _plan_con_ticket(monkeypatch, tickers=("MELI",))
+    ahora = datetime(2026, 10, 5, 10, 0)
+    monkeypatch.setattr(planes_dca, "_ahora", lambda: ahora)
+    planes_dca._tool_gestionar_plan_dca({"accion": "previsualizar", "dia": 20, "monto_usd": 50, "tickers": ["NU"]})
+    _trades_falsos(monkeypatch)
+    assert not _ejecutar(1, "SÍ")["ok"]
+
+    monkeypatch.setattr(planes_dca, "_ahora", lambda: ahora + timedelta(minutes=planes_dca.MINUTOS_BORRADOR_VIGENTE + 1))
+    assert _ejecutar(1, "SÍ")["ok"]

@@ -118,36 +118,54 @@ def get_asset(ticker: str) -> dict:
     # real: un ticker inexistente devuelve 404 y uno válido {"data": {"symbol": ...}}.
     return _call_tool("get_asset", {"symbol": ticker})
 
-def create_trade(ticker: str, side: str, amount: float, order_type: str = "market", price: Optional[float] = None) -> dict:
+def create_trade(symbol: str, direction: str, amount: float, order_type: str = "MARKET",
+                 limit_price: Optional[float] = None, time_in_force: Optional[str] = None) -> dict:
     """
-    Ejecuta una orden. NUNCA llamar sin confirmación explícita del usuario.
-    side: 'buy' o 'sell' | order_type: 'market' o 'limit'
+    Ejecuta una orden por monto en USD. NUNCA llamar sin confirmación explícita del usuario.
+    direction: 'BUY' o 'SELL' | order_type: 'MARKET' o 'LIMIT'
+
+    Los nombres y valores siguen el schema real del MCP de Wallbit: symbol,
+    direction (BUY/SELL), order_type en mayúsculas, amount en USD, y para
+    LIMIT limit_price + time_in_force (DAY o GTC, obligatorio en Wallbit —
+    si no se pasa, se usa DAY: la orden vence al cierre y no queda colgada).
+    Wallbit también acepta STOP y STOP_LIMIT, pero el bot no los usa y se
+    rechazan acá para no mandar órdenes que nadie revisó.
 
     Antes de tocar el servidor real de Wallbit, valida localmente lo básico
-    (monto positivo, ticker no vacío, precio presente en órdenes LIMIT) —
+    (monto positivo, symbol no vacío, precio presente en órdenes LIMIT) —
     así un dato mal formado se corta acá con un mensaje claro, en vez de
     mandarse tal cual a la cuenta real y depender de que Wallbit lo rechace
     del otro lado con un error menos entendible.
     """
-    if not ticker or not isinstance(ticker, str):
-        return {"ok": False, "error": "Ticker inválido: no puede estar vacío"}
-    if side not in ("buy", "sell"):
-        return {"ok": False, "error": f"side inválido: '{side}' (tiene que ser 'buy' o 'sell')"}
-    if not isinstance(amount, (int, float)) or amount <= 0:
+    if not symbol or not isinstance(symbol, str) or not symbol.strip():
+        return {"ok": False, "error": "Symbol inválido: no puede estar vacío"}
+    direction = direction.upper() if isinstance(direction, str) else direction
+    if direction not in ("BUY", "SELL"):
+        return {"ok": False, "error": f"direction inválido: '{direction}' (tiene que ser 'BUY' o 'SELL')"}
+    if not isinstance(amount, (int, float)) or isinstance(amount, bool) or amount <= 0:
         return {"ok": False, "error": f"Monto inválido: {amount} (tiene que ser un número mayor a 0)"}
-    if order_type not in ("market", "limit"):
-        return {"ok": False, "error": f"order_type inválido: '{order_type}' (tiene que ser 'market' o 'limit')"}
-    if order_type == "limit" and (price is None or price <= 0):
-        return {"ok": False, "error": "Las órdenes LIMIT necesitan un 'price' mayor a 0"}
+    order_type = order_type.upper() if isinstance(order_type, str) else order_type
+    if order_type not in ("MARKET", "LIMIT"):
+        return {"ok": False, "error": f"order_type inválido: '{order_type}' (tiene que ser 'MARKET' o 'LIMIT')"}
 
     params = {
-        "ticker": ticker,
-        "side": side,
+        "symbol": symbol.strip().upper(),
+        "direction": direction,
         "amount": amount,
-        "order_type": order_type
+        "order_type": order_type,
+        "currency": "USD",
     }
-    if price is not None and order_type == "limit":
-        params["price"] = price
+    if order_type == "LIMIT":
+        if not isinstance(limit_price, (int, float)) or isinstance(limit_price, bool) or limit_price <= 0:
+            return {"ok": False, "error": "Las órdenes LIMIT necesitan un 'limit_price' mayor a 0"}
+        if time_in_force is None:
+            time_in_force = "DAY"
+        if isinstance(time_in_force, str):
+            time_in_force = time_in_force.upper()
+        if time_in_force not in ("DAY", "GTC"):
+            return {"ok": False, "error": f"time_in_force inválido: '{time_in_force}' (tiene que ser 'DAY' o 'GTC')"}
+        params["limit_price"] = limit_price
+        params["time_in_force"] = time_in_force
     return _call_tool("create_trade", params)
 
 def _parse_portfolio_text(texto: str) -> list:
@@ -439,14 +457,22 @@ def _tool_get_asset(inputs: dict):
 
 @tool(
     "create_trade",
-    "Ejecuta orden. SOLO con SÍ/CONFIRMO explícito.",
-    {"type": "object", "properties": {"ticker": {"type": "string"}, "side": {"type": "string", "enum": ["buy", "sell"]}, "amount": {"type": "number"}, "order_type": {"type": "string", "enum": ["market", "limit"]}, "price": {"type": "number"}}, "required": ["ticker", "side", "amount", "order_type"]}
+    "Ejecuta orden por monto en USD. SOLO con SÍ/CONFIRMO explícito. Para LIMIT: limit_price y time_in_force (DAY por default, o GTC).",
+    {"type": "object", "properties": {
+        "symbol": {"type": "string"},
+        "direction": {"type": "string", "enum": ["BUY", "SELL"]},
+        "amount": {"type": "number", "description": "Monto en USD"},
+        "order_type": {"type": "string", "enum": ["MARKET", "LIMIT"]},
+        "limit_price": {"type": "number", "description": "Solo LIMIT"},
+        "time_in_force": {"type": "string", "enum": ["DAY", "GTC"], "description": "Solo LIMIT"}
+    }, "required": ["symbol", "direction", "amount", "order_type"]}
 )
 def _tool_create_trade(inputs: dict):
     return create_trade(
-        ticker=inputs["ticker"],
-        side=inputs["side"],
+        symbol=inputs["symbol"],
+        direction=inputs["direction"],
         amount=inputs["amount"],
-        order_type=inputs.get("order_type", "market"),
-        price=inputs.get("price")
+        order_type=inputs.get("order_type", "MARKET"),
+        limit_price=inputs.get("limit_price"),
+        time_in_force=inputs.get("time_in_force"),
     )

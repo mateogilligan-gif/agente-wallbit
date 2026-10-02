@@ -303,7 +303,9 @@ el día 5, USD 100 en MELI, NU y AAPL en partes iguales"*. Si falta algún
 dato (día, monto, tickers o si el reparto es en partes iguales o con %
 propios), te lo pregunta. Antes de guardar te muestra el resumen
 (*"Plan 1: día 5, USD 100.00, MELI 33.33% / NU 33.33% / AAPL 33.34%"*) y te
-pide confirmación. También podés pedirle *"mostrame mis planes"*, *"pasá el
+pide que respondas **GUARDAR**. Las ediciones también se guardan con
+GUARDAR. "SÍ" queda reservado para comprar: un "sí" durante la creación no
+guarda el plan ni confirma un ticket pendiente. También podés pedirle *"mostrame mis planes"*, *"pasá el
 plan 2 a USD 80"*, *"pausá el plan 1"*, *"reactivá el plan 1"* o
 *"borrá el plan 3"*.
 

@@ -17,38 +17,96 @@ import wallbit_client
 # sin red — si algún día alguno empieza a intentar de verdad la llamada de
 # red, el test fallaría por timeout/conexión en vez de por el assert.
 
-def test_create_trade_rechaza_ticker_vacio():
-    resultado = wallbit_client.create_trade("", "buy", 100)
+def test_create_trade_rechaza_symbol_vacio():
+    resultado = wallbit_client.create_trade("", "BUY", 100)
     assert resultado["ok"] is False
-    assert "ticker" in resultado["error"].lower()
+    assert "symbol" in resultado["error"].lower()
 
 
-def test_create_trade_rechaza_side_invalido():
-    resultado = wallbit_client.create_trade("AAPL", "hodl", 100)
+def test_create_trade_rechaza_direction_invalido():
+    resultado = wallbit_client.create_trade("AAPL", "HODL", 100)
     assert resultado["ok"] is False
-    assert "side" in resultado["error"].lower()
+    assert "direction" in resultado["error"].lower()
 
 
 def test_create_trade_rechaza_monto_cero_o_negativo():
-    assert wallbit_client.create_trade("AAPL", "buy", 0)["ok"] is False
-    assert wallbit_client.create_trade("AAPL", "buy", -50)["ok"] is False
+    assert wallbit_client.create_trade("AAPL", "BUY", 0)["ok"] is False
+    assert wallbit_client.create_trade("AAPL", "BUY", -50)["ok"] is False
 
 
 def test_create_trade_rechaza_order_type_invalido():
-    resultado = wallbit_client.create_trade("AAPL", "buy", 100, order_type="stop")
+    # Wallbit acepta STOP, pero el bot no lo usa: se corta acá
+    resultado = wallbit_client.create_trade("AAPL", "BUY", 100, order_type="STOP")
     assert resultado["ok"] is False
     assert "order_type" in resultado["error"].lower()
 
 
 def test_create_trade_rechaza_limit_sin_precio():
-    resultado = wallbit_client.create_trade("AAPL", "buy", 100, order_type="limit")
+    resultado = wallbit_client.create_trade("AAPL", "BUY", 100, order_type="LIMIT")
     assert resultado["ok"] is False
-    assert "limit" in resultado["error"].lower()
+    assert "limit_price" in resultado["error"]
 
 
 def test_create_trade_rechaza_limit_con_precio_cero():
-    resultado = wallbit_client.create_trade("AAPL", "buy", 100, order_type="limit", price=0)
+    resultado = wallbit_client.create_trade("AAPL", "BUY", 100, order_type="LIMIT", limit_price=0)
     assert resultado["ok"] is False
+
+
+def test_create_trade_rechaza_time_in_force_invalido():
+    resultado = wallbit_client.create_trade("AAPL", "BUY", 100, order_type="LIMIT", limit_price=150, time_in_force="IOC")
+    assert resultado["ok"] is False
+    assert "time_in_force" in resultado["error"]
+
+
+# ─── Formato que llega a Wallbit (schema real del MCP) ─────────────────────
+# _call_tool está mockeado: se captura lo que se mandaría, sin red y sin
+# ninguna orden real.
+
+def _capturar_llamadas(monkeypatch):
+    llamadas = []
+    monkeypatch.setattr(wallbit_client, "_call_tool", lambda nombre, params=None: llamadas.append((nombre, params)) or {"ok": True, "data": "ok"})
+    return llamadas
+
+
+def test_create_trade_market_usa_los_nombres_del_schema_real(monkeypatch):
+    llamadas = _capturar_llamadas(monkeypatch)
+    assert wallbit_client.create_trade("meli", "BUY", 33.33)["ok"]
+    assert llamadas == [("create_trade", {"symbol": "MELI", "direction": "BUY", "amount": 33.33, "order_type": "MARKET", "currency": "USD"})]
+
+
+def test_create_trade_limit_manda_limit_price_y_time_in_force_day_por_default(monkeypatch):
+    llamadas = _capturar_llamadas(monkeypatch)
+    wallbit_client.create_trade("AAPL", "SELL", 100, order_type="LIMIT", limit_price=210.5)
+    params = llamadas[0][1]
+    assert params["order_type"] == "LIMIT"
+    assert params["limit_price"] == 210.5
+    assert params["time_in_force"] == "DAY"
+    assert "price" not in params and "ticker" not in params and "side" not in params
+
+
+def test_create_trade_normaliza_minusculas(monkeypatch):
+    llamadas = _capturar_llamadas(monkeypatch)
+    wallbit_client.create_trade("AAPL", "buy", 100, order_type="limit", limit_price=150, time_in_force="gtc")
+    params = llamadas[0][1]
+    assert (params["direction"], params["order_type"], params["time_in_force"]) == ("BUY", "LIMIT", "GTC")
+
+
+def test_create_trade_market_no_manda_campos_de_limit(monkeypatch):
+    llamadas = _capturar_llamadas(monkeypatch)
+    wallbit_client.create_trade("AAPL", "BUY", 100, limit_price=150, time_in_force="GTC")
+    assert "limit_price" not in llamadas[0][1] and "time_in_force" not in llamadas[0][1]
+
+
+def test_get_asset_manda_symbol(monkeypatch):
+    llamadas = _capturar_llamadas(monkeypatch)
+    wallbit_client.get_asset("MELI")
+    assert llamadas == [("get_asset", {"symbol": "MELI"})]
+
+
+def test_tool_create_trade_usa_el_schema_nuevo(monkeypatch):
+    llamadas = _capturar_llamadas(monkeypatch)
+    wallbit_client._tool_create_trade({"symbol": "NU", "direction": "BUY", "amount": 10, "order_type": "MARKET"})
+    assert llamadas[0][1]["symbol"] == "NU" and llamadas[0][1]["direction"] == "BUY"
 
 
 def test_parsea_formato_dict_de_tickers():
