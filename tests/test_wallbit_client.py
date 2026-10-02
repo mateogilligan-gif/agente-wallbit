@@ -102,9 +102,8 @@ def test_saldo_normal_se_muestra_bien():
 
 
 # ─── obtener_cash_inversion ─────────────────────────────────────────────────
-# Se usa para detectar cuándo la persona ya hizo el traspaso manual a la
-# cuenta de Inversión (Wallbit no tiene API de transferencias, así que esta
-# es la única forma de notarlo). El campo "cash" ya se filtraba en
+# Los planes DCA lo usan para chequear si la plata del plan ya está en la
+# cuenta de Inversión antes de armar el ticket. El campo "cash" ya se filtraba en
 # _parse_portfolio_text para no confundirlo con un ticker falso — acá es
 # donde se usa ese valor para algo real.
 

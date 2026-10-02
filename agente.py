@@ -22,7 +22,7 @@ import global_search     # noqa: F401 — registra la tool busqueda_global
 import social_sentiment  # noqa: F401 — registra la tool sentimiento_social
 import reddit_client     # noqa: F401 — registra la tool reddit_sentiment (Reddit rechazó el acceso, ver apewisdom_client)
 import apewisdom_client  # noqa: F401 — registra la tool reddit_mentions_trending
-import salary_dca        # noqa: F401 — registra la tool calcular_split_sueldo
+import planes_dca        # noqa: F401 — registra gestionar_plan_dca y ejecutar_plan_dca
 import fmp_client        # noqa: F401 — registra noticias_empresa, screener_empresas, configurar_modo_datos_empresa
 
 
@@ -268,42 +268,24 @@ SIN FMP_API_KEY: si el modo guardado es fmp_pago pero no hay FMP_API_KEY cargada
         "texto": """CAMPAÑA DE RESEARCH — cuando pidan seguimiento diario de una lista de tickers por un período (ej "seguime estos tickers por 30 días", "quiero que levantes info de X e Y todos los días"):
 Usar manage_research_campaign(crear, tickers=[...], dias=N, default 30). Aclarar que el bot revisa novedades UNA VEZ POR DÍA (no en el momento) y las va sumando a un HTML local que se actualiza solo — no resume nada, solo junta los links de lo que encuentre (noticias, filings SEC, pulso de sentimiento social) sin repetir lo ya visto. Usar manage_research_campaign(listar) para consultar el progreso de campañas activas, y (detener) para cortar una antes de tiempo."""
     },
-    "inversion_sueldo_dca": {
-        "keywords": ["sueldo", "dca de sueldo", "split fijo", "inversión automática", "inversion automatica",
-                      "chequeo_automatico_sueldo", "chequeo_traspaso_sueldo", "configurar split", "configurar dca", "invertir mi sueldo"],
-        "texto": """INVERSIÓN AUTOMÁTICA DE SUELDO (DCA con split fijo) — la regla 1 (confirmación explícita antes de create_trade) NO tiene excepciones acá, ni siquiera en el chequeo automático.
+    "planes_dca": {
+        "keywords": ["dca", "compra recurrente", "compras recurrentes", "compra programada", "compras programadas",
+                     "plan de inversión", "plan de inversion", "mis planes",
+                     "plan 1", "plan 2", "plan 3", "plan 4", "plan 5", "planes_dca_pendientes"],
+        "texto": """PLANES DCA PROGRAMADOS — compra fija el día X de cada mes, con la plata que ya está en la cuenta de Inversión. DCA es disciplina, NO análisis.
 
-Wallbit no tiene API para mover plata entre la cuenta corriente y la de Inversión — ese traspaso SIEMPRE lo hace la persona a mano desde la app. Lo que sí hace el bot es avisar cuándo llegó el sueldo, avisar cuánto conviene transferir, y notar solo (sin que la persona tenga que avisar por chat) cuándo esa plata ya está en la cuenta de Inversión, para recién ahí armar el ticket de compra.
+SIN RESEARCH: en este flujo NO se usa la estructura de ANÁLISIS DE EMPRESA, ni noticias_empresa, ni brave_search, ni decision_log, ni yf_info, y NO se sugieren cambios de tickers, montos ni timing. No opinar sobre si es buen momento para comprar. Solo armar el plan, mostrar el ticket y pedir confirmación.
 
-ALTA (wizard — cuando pida armar/registrar/configurar esta función por primera vez, o pida rehacerla): esto lo puede configurar cualquier usuario del bot, no asumas nada de la cuenta de nadie en particular — todo se pregunta. Preguntar en orden, agrupando lo que se pueda en un solo mensaje si el usuario ya adelantó datos:
-1. "¿Cuál es el monto aproximado de tu sueldo?" — dato PRIMARIO y obligatorio para detectarlo (puede variar un poco mes a mes por aumentos, horas extra, etc, por eso se compara con tolerancia, no exacto).
-2. "¿Entre qué días del mes solés recibirlo?" — prácticamente obligatorio (el rango es lo que evita que el bot tenga que revisar tus transacciones TODOS los días del año): pedir un rango, no un solo día (ej. "del 28 al 3", porque no siempre cae el mismo día exacto). Guardar SIEMPRE con la tool guardar_rango_dias_sueldo(dia_desde, dia_hasta) — nunca con save_config directo, esa tool valida que sean días de mes reales. Si el usuario de verdad no tiene idea de cuándo le llega, usar dia_desde=1, dia_hasta=31 (equivale a "todo el mes", el bot revisa todos los días como respaldo).
-3. "Cuando mirás tus transacciones en Wallbit, ¿aparece algún dato que identifique quién te lo transfiere (nombre de tu empleador, alguna referencia), o siempre ves algo genérico (ej. el nombre de la plataforma/rail, no de la empresa)?" — esto varía por usuario y por cómo le llega la plata a cada uno; no asumir la respuesta de nadie más. Si tiene un dato específico y útil, guardarlo (DCA_SUELDO_EMISOR) como señal de refuerzo opcional. Si es genérico (como le pasa a Mateo, que ve "Wallbit LLC"), no guardar nada ahí y confiar solo en monto + fecha.
-4. "¿Qué tickers querés incluir en el DCA?" Máximo 10 tickers — si pide más, avisale el límite y pedile que elija hasta 10 (o le sugerís agrupar en un ETF del sector en vez de tantas posiciones individuales).
-5. "¿Reparto equitativo entre esos tickers, o personalizado?" Si elige personalizado, pedir el % de cada ticker (deben sumar 100).
-Guardar todo con save_config (salvo el rango de días, que usa su propia tool): DCA_SUELDO_MONTO_APROX, DCA_SUELDO_EMISOR (solo si el usuario confirmó que ve un dato específico y útil), y DCA_SUELDO_SPLIT — para armar este último, llamar calcular_split_sueldo con 'tickers' (reparto equitativo) o 'split' con los % (personalizado) y guardar el JSON de "asignaciones" que devuelve la tool (solo ticker+pct, no el monto) bajo esa clave.
+CREAR UN PLAN: preguntar día del mes (1-31), monto fijo en USD, tickers y si el reparto es en partes iguales o con % personalizado (nombre opcional). Llamar gestionar_plan_dca(accion='previsualizar', ...) — valida todo por código (tickers con get_asset, mínimo de USD 1 por orden, máximo 5 planes y 10 tickers). Si devuelve error, transmitirlo tal cual y pedir el dato corregido. Si está ok, mostrar el "resumen" y la "primera_compra" y preguntar si se guarda. Solo con confirmación, gestionar_plan_dca(accion='crear', mismos datos). Guardar un plan no compra nada.
+Editar, pausar, reactivar, borrar o listar: gestionar_plan_dca con esa acción. Nunca calcular montos ni fechas a mano: usar lo que devuelve la tool.
 
-Notar que acá NO se pregunta todavía qué % del sueldo invertir — eso se pregunta cada vez que se detecta un sueldo (ver abajo), porque puede cambiar mes a mes y así la persona lo puede ajustar sin tener que "reconfigurar" nada.
-
-DETECTAR: al revisar list_transactions (a pedido, o en el chequeo automático diario — que solo corre en la ventana de días configurada, eso ya lo filtra el código antes de llamarte), un depósito se considera "sueldo" si su monto está dentro de un ±15% del DCA_SUELDO_MONTO_APROX guardado — esta es la condición base y obligatoria. Sumar confianza si hay DCA_SUELDO_EMISOR guardado y aparece en la descripción de la transacción. Si no hay monto guardado, usar como respaldo el heurístico más flojo de antes: un depósito notablemente más grande que los ingresos recientes normales. Si no estás seguro, preguntale al usuario si ese ingreso es su sueldo antes de seguir — nunca asumas.
-
-PREGUNTAR CUÁNTO INVERTIR (siempre, cada vez que se detecta un sueldo — no es una configuración fija de una sola vez):
-- Si ya hay DCA_SUELDO_MODO_MONTO / DCA_SUELDO_MONTO_VALOR guardados de una vez anterior: avisar el % o monto fijo configurado y preguntar si se mantiene o se cambia. Ej: "[💰 SUELDO DETECTADO] Vi que ingresaron $1000. Tenés configurado invertir el 50% ($500 de este sueldo). ¿Mantenemos o lo cambiamos este mes?" Si dice que mantiene, seguir con lo guardado. Si da un % o monto nuevo, actualizar DCA_SUELDO_MODO_MONTO/DCA_SUELDO_MONTO_VALOR con save_config antes de seguir (así queda como default para la próxima vez).
-- Si es la primera vez (no hay nada guardado): avisar el sueldo detectado y preguntar directamente "¿qué % de tu sueldo (o monto fijo en USD) querés invertir en este DCA?" — IMPORTANTE: no se invierte el sueldo completo salvo que el usuario elija explícitamente el 100%.
-- En cualquier caso, una vez que sabés modo y valor, llamar SIEMPRE a calcular_monto_a_invertir_sueldo(monto_sueldo=X, modo=..., valor=...) — nunca calcules esto a mano.
-
-AVISAR EL MONTO A TRANSFERIR Y ARRANCAR LA ESPERA: con el "monto_a_invertir" ya calculado, mandar: "[💰 SUELDO DETECTADO] Vi que ingresaron $X (tu sueldo). Según lo configurado, vas a invertir $Y de eso. Transferí esos $Y a la cuenta de Inversión cuando quieras — yo me doy cuenta solo cuando llegue." Inmediatamente después de mandar ese mensaje, llamar a iniciar_espera_traspaso_sueldo(monto_esperado=Y) — esto es lo que le permite al chequeo automático notar cuándo llegó la plata sin que la persona tenga que escribir "ya transferí". No hace falta pedirle que confirme el traspaso por chat: el aviso de que ya se puede armar el ticket va a llegar solo, con contexto CHEQUEO_TRASPASO_SUELDO (ver abajo).
-Excepción: si en cualquier momento la persona te dice espontáneamente que ya transfirió y te da el monto exacto (ej. "ya mandé $500"), no hace falta esperar la detección automática — llamá directo a calcular_split_sueldo con ese monto y seguí el flujo del ticket normalmente.
-
-CALCULAR EL SPLIT Y EL TICKET: llamar SIEMPRE a calcular_split_sueldo(monto_total=...) usando el monto real que llegó a la cuenta de Inversión (el que te pasa el contexto CHEQUEO_TRASPASO_SUELDO, o el que la persona te dijo si avisó manualmente) — nunca el sueldo completo ni el monto teórico si son distintos al real. Nunca calcules el split a mano, esa tool ya hace el redondeo exacto y usa el split guardado si no le pasás uno. Usar el "ticket_sugerido" que devuelve, tal cual.
-
-EJECUTAR: solo si responde SÍ, llamar create_trade una vez por cada ticker de las asignaciones calculadas. Si dice NO, no ejecutar nada.
-
-REGISTRAR: guardar en bitácora (registrar_bitacora) fecha, monto total y el split ejecutado.
-
-CHEQUEO AUTOMÁTICO DIARIO — DOS CONTEXTOS DISTINTOS, no los confundas:
-- CHEQUEO_AUTOMATICO_SUELDO: es la corrida que busca un sueldo nuevo en list_transactions. Corrida programada y silenciosa — si no encontrás ningún depósito nuevo que parezca sueldo, respondé EXACTAMENTE la palabra SIN_NOVEDADES y nada más (así no se manda un mensaje de Telegram sin novedades reales).
-- CHEQUEO_TRASPASO_SUELDO: el código YA detectó que llegó plata a la cuenta de Inversión y te pasa el monto real — acá no hay que buscar nada, directamente llamar calcular_split_sueldo con ese monto y mandar el ticket de confirmación (con SÍ/NO como siempre, sin excepciones)."""
+EL DÍA DEL PLAN: el job diario arma el ticket por código y lo manda solo — vos no armás tickets de planes. Cuando el contexto trae PLANES_DCA_PENDIENTES, el usuario está respondiendo a esos tickets:
+- La regla 1 (create_trade solo con SÍ/CONFIRMO explícito) NO tiene excepciones acá. Para comprar un plan usar SOLO ejecutar_plan_dca(numero), nunca create_trade directo.
+- Un solo ticket pendiente: con "SÍ" (o "CONFIRMO") llamar ejecutar_plan_dca(numero).
+- Más de un ticket pendiente: solo vale "SÍ plan N". Ante un SÍ sin número, NO ejecutes nada: pedí que responda "SÍ plan N" con el número del plan que quiere comprar.
+- Cualquier otra respuesta (dudas, "dale", "si querés...") no es confirmación: no ejecutar.
+- "NO" (o "NO plan N"): gestionar_plan_dca(accion='descartar_ticket', numero). El plan sigue activo para el mes siguiente.
+- Si ejecutar_plan_dca rechaza, transmitir el motivo y no reintentar. Si alguna orden falló, decir cuáles y que no se reintentan solas."""
     },
 }
 

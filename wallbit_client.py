@@ -113,7 +113,10 @@ def list_transactions(limit: int = 50) -> dict:
     return _call_tool("list_transactions", {"limit": limit})
 
 def get_asset(ticker: str) -> dict:
-    return _call_tool("get_asset", {"ticker": ticker})
+    # El MCP de Wallbit espera el parámetro "symbol" (con "ticker" rechaza
+    # cualquier llamada con un error de validación). Verificado contra la API
+    # real: un ticker inexistente devuelve 404 y uno válido {"data": {"symbol": ...}}.
+    return _call_tool("get_asset", {"symbol": ticker})
 
 def create_trade(ticker: str, side: str, amount: float, order_type: str = "market", price: Optional[float] = None) -> dict:
     """
@@ -331,11 +334,9 @@ def obtener_cash_inversion(stocks_res: dict) -> Optional[float]:
     Extrae el efectivo disponible (no invertido) dentro de la cuenta de
     Inversión, a partir de la respuesta cruda de get_stocks_balance.
 
-    Wallbit no tiene una API para transferir plata entre la cuenta corriente
-    y la de inversión, así que esta es la única forma de que el bot note
-    cuándo la persona ya hizo ese traspaso a mano: comparando este valor
-    contra una foto de sí mismo tomada antes (ver salary_dca.py,
-    iniciar_espera_traspaso_sueldo / traspaso_detectado).
+    Lo usan los planes DCA programados (ver planes_dca.py) para chequear,
+    el día de cada plan, si la plata ya está en la cuenta de Inversión antes
+    de armar el ticket de compra.
 
     El campo "cash" de esta respuesta ya se venía descartando en
     _parse_portfolio_text (CLAVES_NO_TICKER) para que no se confunda con un

@@ -139,47 +139,71 @@ def test_prompt_busca_keywords_tambien_en_contexto_extra():
     assert agente.PROMPT_MODULES["morning_note"]["texto"] in p
 
 
-# ─── Módulo de inversión de sueldo (DCA con split fijo) ─────────────────────
+# ─── Módulo de planes DCA programados ───────────────────────────────────────
 
-def test_prompt_suma_modulo_sueldo_con_keyword_explicita():
-    p = agente.construir_system_prompt("quiero configurar el split fijo de mi sueldo")
-    assert agente.PROMPT_MODULES["inversion_sueldo_dca"]["texto"] in p
-
-
-def test_prompt_suma_modulo_sueldo_en_el_chequeo_automatico_diario():
-    """El job diario de telegram_bot.py manda esto como contexto_extra — tiene
-    que disparar el módulo igual que si Mateo lo pidiera por chat."""
-    p = agente.construir_system_prompt("Chequeo automático de sueldo.", contexto_extra="CHEQUEO_AUTOMATICO_SUELDO: revisá list_transactions...")
-    assert agente.PROMPT_MODULES["inversion_sueldo_dca"]["texto"] in p
+def test_prompt_suma_modulo_planes_dca_con_keyword():
+    for msg in ["quiero armar un plan de DCA", "configurame una compra recurrente el día 5", "mostrame mis planes", "pausá el plan 2"]:
+        assert agente.PROMPT_MODULES["planes_dca"]["texto"] in agente.construir_system_prompt(msg)
 
 
-def test_modulo_sueldo_no_tiene_excepciones_a_la_confirmacion():
-    """Guardrail de regresión: el texto del módulo no debe sugerir nunca
-    ejecutar create_trade sin el SÍ explícito del usuario, ni siquiera en el
-    chequeo automático."""
-    texto = agente.PROMPT_MODULES["inversion_sueldo_dca"]["texto"]
-    assert "SIN_NOVEDADES" in texto  # la corrida silenciosa no manda mensajes falsos
-    assert "NO tiene excepciones" in texto  # la regla de confirmación se reafirma explícitamente
+def test_prompt_suma_modulo_planes_dca_con_el_contexto_de_tickets_pendientes():
+    """telegram_bot.mensaje_libre suma este contexto cuando el job dejó tickets
+    esperando respuesta: un simple "SÍ" tiene que traer el módulo."""
+    p = agente.construir_system_prompt("SÍ", contexto_extra="PLANES_DCA_PENDIENTES: tickets esperando respuesta: plan 1 ...")
+    assert agente.PROMPT_MODULES["planes_dca"]["texto"] in p
 
 
-def test_modulo_sueldo_pregunta_rango_de_dias_y_no_asume_el_emisor_de_nadie():
-    """Guardrail de regresión: la detección por emisor ('Origen: Wallbit LLC')
-    fue un hallazgo puntual de la cuenta de Mateo, no una verdad general del
-    bot — el wizard tiene que preguntarle a cada usuario, no asumir la
-    respuesta de nadie más. También cubre que el sueldo se detecta con un
-    RANGO de días (no un solo día fijo), guardado con su propia tool para
-    que quede validado."""
-    texto = agente.PROMPT_MODULES["inversion_sueldo_dca"]["texto"]
-    assert "guardar_rango_dias_sueldo" in texto
-    assert "no asumir la respuesta de nadie más" in texto
+def test_modulo_planes_dca_dice_que_no_hay_research():
+    texto = agente.PROMPT_MODULES["planes_dca"]["texto"]
+    assert "SIN RESEARCH" in texto
+    for prohibido in ("ANÁLISIS DE EMPRESA", "noticias_empresa", "brave_search", "decision_log"):
+        assert prohibido in texto
+    assert "NO se sugieren cambios de tickers" in texto
 
 
-def test_modulo_sueldo_activa_con_contexto_de_traspaso_detectado():
-    """El chequeo de traspaso (telegram_bot._chequear_traspaso_pendiente) manda
-    este contexto cuando ya notó que llegó la plata a la cuenta de Inversión —
-    tiene que disparar el módulo igual que el resto de los contextos automáticos."""
-    p = agente.construir_system_prompt("Chequeo automático de traspaso de sueldo.", contexto_extra="CHEQUEO_TRASPASO_SUELDO: ya se detectó...")
-    assert agente.PROMPT_MODULES["inversion_sueldo_dca"]["texto"] in p
+def test_modulo_planes_dca_confirmacion_sin_excepciones_y_solo_por_la_tool():
+    texto = agente.PROMPT_MODULES["planes_dca"]["texto"]
+    assert "NO tiene excepciones" in texto
+    assert "SOLO ejecutar_plan_dca" in texto
+    assert "nunca create_trade directo" in texto
+
+
+def test_modulo_planes_dca_pide_si_plan_n_con_varios_pendientes():
+    texto = agente.PROMPT_MODULES["planes_dca"]["texto"]
+    assert 'solo vale "SÍ plan N"' in texto
+    assert "Ante un SÍ sin número, NO ejecutes nada" in texto
+
+
+def test_ya_no_existe_el_modulo_de_sueldo():
+    assert "inversion_sueldo_dca" not in agente.PROMPT_MODULES
+    assert not any(n in agente.TOOL_REGISTRY for n in (
+        "calcular_split_sueldo", "calcular_monto_a_invertir_sueldo", "guardar_rango_dias_sueldo", "iniciar_espera_traspaso_sueldo"))
+    assert "gestionar_plan_dca" in agente.TOOL_REGISTRY and "ejecutar_plan_dca" in agente.TOOL_REGISTRY
+
+
+def test_ticket_guardado_como_mensaje_del_bot_no_rompe_la_alternancia():
+    """El job guarda el ticket como mensaje 'assistant' sin un 'user' antes
+    (incluso dos tickets seguidos): el historial tiene que seguir alternado."""
+    historial = [
+        {"role": "user", "content": "hola"},
+        {"role": "assistant", "content": "hola, ¿en qué te ayudo?"},
+        {"role": "assistant", "content": "Plan 1 — ticket ... Respondé SÍ plan 1"},
+        {"role": "assistant", "content": "Plan 2 — ticket ... Respondé SÍ plan 2"},
+        {"role": "user", "content": "SÍ plan 1"},
+    ]
+    limpio = agente._sanitizar_alternancia(historial)
+    roles = [m["role"] for m in limpio]
+    assert all(roles[i] != roles[i + 1] for i in range(len(roles) - 1))
+    assert roles[0] == "user"
+    assert "Respondé SÍ plan 2" in limpio[1]["content"]  # se fusionaron, no se perdió ninguno
+
+
+def test_historial_que_arranca_con_un_ticket_del_bot_sigue_valido():
+    limpio = agente._sanitizar_alternancia([
+        {"role": "assistant", "content": "Plan 1 — ticket ... Respondé SÍ"},
+        {"role": "user", "content": "SÍ"},
+    ])
+    assert [m["role"] for m in limpio] == ["user"]
 
 
 # ─── Módulo de datos de empresa (modo gratis/Brave vs fmp_pago/FMP) ─────────
@@ -224,40 +248,3 @@ def test_modulo_datos_empresa_no_afirma_costo_fijo_del_screener():
     texto = agente.PROMPT_MODULES["datos_empresa_fmp"]["texto"]
     assert "Starter" in texto
     assert "no está confirmado" in texto or "NO está confirmado" in texto
-
-
-def test_modulo_sueldo_pregunta_porcentaje_en_cada_deteccion_no_en_el_alta():
-    """Guardrail de regresión: el % o monto fijo a invertir se pregunta CADA
-    VEZ que se detecta un sueldo (con opción de mantener o cambiar), no una
-    sola vez en el wizard de alta — así se puede ajustar mes a mes sin
-    'reconfigurar' nada."""
-    texto = agente.PROMPT_MODULES["inversion_sueldo_dca"]["texto"]
-    assert "no es una configuración fija de una sola vez" in texto
-    assert "¿Mantenemos o lo cambiamos este mes?" in texto
-
-
-def test_modulo_sueldo_avisa_el_tope_de_10_tickers():
-    """El tope de 10 tickers está aplicado en código (salary_dca.validar_split),
-    pero también tiene que estar en el wizard para que el LLM no deje que el
-    usuario configure de más y se entere recién al fallar la tool."""
-    texto = agente.PROMPT_MODULES["inversion_sueldo_dca"]["texto"]
-    assert "Máximo 10 tickers" in texto
-
-
-def test_modulo_sueldo_no_invierte_el_sueldo_completo_por_default():
-    """Guardrail de regresión: el bug que Mateo encontró — hay que preguntar
-    qué % o monto fijo del sueldo invertir, y el traspaso/split se calculan
-    sobre esa porción (calcular_monto_a_invertir_sueldo), nunca sobre el
-    depósito completo salvo que el usuario elija 100%."""
-    texto = agente.PROMPT_MODULES["inversion_sueldo_dca"]["texto"]
-    assert "calcular_monto_a_invertir_sueldo" in texto
-    assert "no se invierte el sueldo completo" in texto
-
-
-def test_modulo_sueldo_usa_monto_real_del_traspaso_no_el_teorico():
-    """Guardrail de regresión: como el traspaso es manual, la persona puede
-    transferir un poco más o menos de lo calculado — el split SIEMPRE se arma
-    con el monto real que llegó a la cuenta de Inversión, no con el teórico."""
-    texto = agente.PROMPT_MODULES["inversion_sueldo_dca"]["texto"]
-    assert "el monto real que llegó a la cuenta de Inversión" in texto
-    assert "nunca el sueldo completo ni el monto teórico" in texto

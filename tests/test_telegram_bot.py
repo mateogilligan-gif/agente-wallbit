@@ -1,17 +1,17 @@
 """
-Test de integración (mockeado) del job chequear_sueldo_diario en telegram_bot.py.
+Test de integración (mockeado) del job chequear_planes_dca_diario y del
+paso del mensaje real del usuario en mensaje_libre (telegram_bot.py).
 
-No se conecta a Telegram real, no llama a la API de Anthropic y no toca la
-DB real (agente.db) — usa una DB sqlite temporal, un "bot" falso que solo
-graba las llamadas a send_message, y un agente.chat mockeado. Sirve para
-probar, sin plata ni cuentas reales de por medio, dos cosas puntuales:
-1. Si agente.chat responde "SIN_NOVEDADES", no se manda ningún mensaje.
-2. Si responde otra cosa, ese texto se manda tal cual por Telegram.
-La ventana de fechas (DCA_SUELDO_ULTIMA_FECHA) se actualiza en los dos casos.
+No se conecta a Telegram real, no llama a la API de Anthropic, no toca la
+DB real (agente.db) ni Wallbit — usa una DB sqlite temporal, un "bot" falso
+que solo graba las llamadas a send_message y wallbit_client/agente.chat
+mockeados.
 """
 import sys
 import os
+import json
 import asyncio
+import sqlite3
 from pathlib import Path
 from datetime import date
 import tempfile
@@ -26,22 +26,33 @@ database.DB_PATH = Path(_tmp_dir) / "test_agente.db"
 database.init_db()
 
 import telegram_bot
+import planes_dca
 
 
 @pytest.fixture(autouse=True)
-def _limpiar_estado_sueldo():
+def _limpiar_planes(monkeypatch):
     """
     database.DB_PATH es un global compartido por TODOS los archivos de test
     que lo tocan (pytest importa todos los módulos de test antes de correr
     ninguno, así que termina apuntando al último que lo reasigna) — sin este
-    reset, un test de test_salary_dca.py que deja guardado un rango de días
-    o un traspaso pendiente le cambiaría el comportamiento a los tests de
-    este archivo. Se corre antes de cada test; los que necesitan un valor
-    puntual lo configuran ellos mismos después.
+    reset, un plan que deja creado test_planes_dca.py le cambiaría el
+    comportamiento a los tests de este archivo. create_trade queda bloqueado
+    por seguridad.
     """
-    for clave in ("DCA_SUELDO_DIA_DESDE", "DCA_SUELDO_DIA_HASTA", "DCA_SUELDO_MONTO_ESPERADO",
-                  "DCA_SUELDO_CASH_BASELINE", "DCA_SUELDO_ESPERA_DESDE"):
-        database.guardar_config(clave, "")
+    database.init_db()
+    conn = sqlite3.connect(database.DB_PATH)
+    conn.execute("DELETE FROM planes_dca")
+    conn.execute("DELETE FROM ejecuciones_dca")
+    conn.execute("DELETE FROM conversaciones")
+    conn.commit()
+    conn.close()
+
+    def prohibido(*a, **k):
+        raise AssertionError("create_trade real llamado en un test")
+
+    monkeypatch.setattr(planes_dca.wallbit_client, "create_trade", prohibido)
+    monkeypatch.setattr(planes_dca.wallbit_client, "get_asset",
+                        lambda t: {"ok": True, "data": json.dumps({"data": {"symbol": t.upper()}})})
     yield
 
 
@@ -58,180 +69,129 @@ class _ContextFalso:
         self.bot = bot
 
 
-def test_sin_novedades_no_manda_mensaje_pero_actualiza_fecha(monkeypatch):
+class _MensajeFalso:
+    def __init__(self, texto):
+        self.text = texto
+        self.respuestas = []
+
+    async def reply_text(self, texto, parse_mode=None):
+        self.respuestas.append(texto)
+
+
+class _UpdateFalso:
+    def __init__(self, user_id, texto):
+        self.effective_user = type("U", (), {"id": user_id})()
+        self.message = _MensajeFalso(texto)
+
+
+class _FechaFija(date):
+    """date.today() fijo para el job (telegram_bot usa date.today())."""
+    @classmethod
+    def today(cls):
+        return date(2026, 10, 5)
+
+
+def _crear_plan(monkeypatch, dia=5, monto=100, tickers=("MELI", "NU", "AAPL")):
+    monkeypatch.setattr(planes_dca, "_hoy", lambda: date(2026, 10, 2))
+    r = planes_dca._tool_gestionar_plan_dca({"accion": "crear", "dia": dia, "monto_usd": monto, "tickers": list(tickers)})
+    assert r["ok"], r
+
+
+def _cash(monkeypatch, valor):
+    llamadas = []
+    monkeypatch.setattr(planes_dca.wallbit_client, "get_stocks_balance",
+                        lambda: llamadas.append(1) or {"ok": True, "data": json.dumps({"cash": valor})})
+    return llamadas
+
+
+def _correr_job():
+    bot = _BotFalso()
+    asyncio.run(telegram_bot.chequear_planes_dca_diario(_ContextFalso(bot)))
+    return bot
+
+
+def test_job_sin_planes_no_llama_a_wallbit_ni_al_agente(monkeypatch):
     monkeypatch.setattr(telegram_bot, "AUTHORIZED_USER_ID", 999999)
-    monkeypatch.setattr(telegram_bot.agente, "chat", lambda *a, **k: "SIN_NOVEDADES")
-    database.guardar_config("DCA_SUELDO_ULTIMA_FECHA", "2020-01-01")
-
-    bot_falso = _BotFalso()
-    asyncio.run(telegram_bot.chequear_sueldo_diario(_ContextFalso(bot_falso)))
-
-    assert bot_falso.mensajes_enviados == []
-    assert database.obtener_config("DCA_SUELDO_ULTIMA_FECHA") == date.today().isoformat()
+    llamadas = _cash(monkeypatch, 1000)
+    monkeypatch.setattr(telegram_bot.agente, "chat", lambda *a, **k: pytest.fail("el job no debería llamar al LLM"))
+    bot = _correr_job()
+    assert bot.mensajes_enviados == []
+    assert llamadas == []
 
 
-def test_con_novedades_manda_el_mensaje_del_agente(monkeypatch):
+def test_job_manda_el_ticket_y_lo_guarda_en_el_historial(monkeypatch):
     monkeypatch.setattr(telegram_bot, "AUTHORIZED_USER_ID", 999999)
-    mensaje_ticket = "[💰 SUELDO DETECTADO] Vi que ingresaron $1500..."
-    monkeypatch.setattr(telegram_bot.agente, "chat", lambda *a, **k: mensaje_ticket)
+    monkeypatch.setattr(telegram_bot, "date", _FechaFija)
+    monkeypatch.setattr(telegram_bot.agente, "chat", lambda *a, **k: pytest.fail("el job no debería llamar al LLM"))
+    _crear_plan(monkeypatch)
+    _cash(monkeypatch, 500)
 
-    bot_falso = _BotFalso()
-    asyncio.run(telegram_bot.chequear_sueldo_diario(_ContextFalso(bot_falso)))
+    bot = _correr_job()
 
-    assert len(bot_falso.mensajes_enviados) == 1
-    assert bot_falso.mensajes_enviados[0]["chat_id"] == 999999
-    assert bot_falso.mensajes_enviados[0]["text"] == mensaje_ticket
+    assert len(bot.mensajes_enviados) == 1
+    assert bot.mensajes_enviados[0]["chat_id"] == 999999
+    texto = bot.mensajes_enviados[0]["text"]
+    assert texto.startswith("Plan 1") and "Respondé SÍ" in texto
+    historial = database.obtener_historial(limite=5)
+    assert historial[-1] == {"role": "assistant", "content": texto}
 
 
-def test_sin_authorized_user_id_no_hace_nada(monkeypatch):
+def test_job_sin_authorized_user_id_no_hace_nada(monkeypatch):
     monkeypatch.setattr(telegram_bot, "AUTHORIZED_USER_ID", 0)
-    llamadas = []
-    monkeypatch.setattr(telegram_bot.agente, "chat", lambda *a, **k: llamadas.append(1) or "algo")
-
-    bot_falso = _BotFalso()
-    asyncio.run(telegram_bot.chequear_sueldo_diario(_ContextFalso(bot_falso)))
-
-    assert llamadas == []  # ni siquiera llega a llamar al agente
-    assert bot_falso.mensajes_enviados == []
+    monkeypatch.setattr(telegram_bot, "date", _FechaFija)
+    _crear_plan(monkeypatch)
+    llamadas = _cash(monkeypatch, 500)
+    bot = _correr_job()
+    assert bot.mensajes_enviados == []
+    assert llamadas == []
 
 
-def test_le_pasa_al_agente_la_ultima_fecha_guardada_como_ventana(monkeypatch):
+def test_job_avisa_falta_de_plata(monkeypatch):
     monkeypatch.setattr(telegram_bot, "AUTHORIZED_USER_ID", 999999)
-    database.guardar_config("DCA_SUELDO_MONTO_ESPERADO", "")  # nada pendiente, no interfiere
-    database.guardar_config("DCA_SUELDO_DIA_DESDE", "")
-    database.guardar_config("DCA_SUELDO_DIA_HASTA", "")
-    database.guardar_config("DCA_SUELDO_ULTIMA_FECHA", "2026-09-01")
+    monkeypatch.setattr(telegram_bot, "date", _FechaFija)
+    _crear_plan(monkeypatch, monto=50, tickers=("NU", "CRML", "AXTI"))
+    _cash(monkeypatch, 18)
+    bot = _correr_job()
+    assert len(bot.mensajes_enviados) == 1
+    assert "te faltan USD 32.00" in bot.mensajes_enviados[0]["text"]
 
-    contextos_recibidos = []
+
+def test_mensaje_libre_pasa_el_texto_real_y_el_contexto_de_pendientes(monkeypatch):
+    monkeypatch.setattr(telegram_bot, "AUTHORIZED_USER_ID", 999999)
+    monkeypatch.setattr(telegram_bot, "date", _FechaFija)
+    _crear_plan(monkeypatch)
+    _cash(monkeypatch, 500)
+    _correr_job()
+
+    recibido = {}
 
     def chat_falso(mensaje, contexto_extra=""):
-        contextos_recibidos.append(contexto_extra)
-        return "SIN_NOVEDADES"
+        recibido["mensaje"] = mensaje
+        recibido["contexto"] = contexto_extra
+        recibido["texto_real_en_la_tool"] = planes_dca.mensaje_usuario_actual()
+        return "ok"
 
     monkeypatch.setattr(telegram_bot.agente, "chat", chat_falso)
-    asyncio.run(telegram_bot.chequear_sueldo_diario(_ContextFalso(_BotFalso())))
+    update = _UpdateFalso(999999, "SÍ")
+    asyncio.run(telegram_bot.mensaje_libre(update, None))
 
-    assert "2026-09-01" in contextos_recibidos[0]
-    assert "CHEQUEO_AUTOMATICO_SUELDO" in contextos_recibidos[0]
+    assert recibido["texto_real_en_la_tool"] == "SÍ"
+    assert "PLANES_DCA_PENDIENTES" in recibido["contexto"]
+    assert planes_dca.mensaje_usuario_actual() is None  # fuera del mensaje ya no vale
 
 
-# ─── ventana de días (DCA_SUELDO_DIA_DESDE/HASTA) ───────────────────────────
-# El chequeo de sueldo nuevo solo debería llamar a la API de Wallbit cuando
-# hoy cae dentro del rango configurado — el resto del mes, ni se molesta.
-# Estos tests mockean salary_dca.hoy_esta_en_ventana_sueldo (ya probada por
-# su cuenta en test_salary_dca.py) para no depender de la fecha real del
-# sistema y poder forzar los dos casos.
-
-def test_fuera_de_la_ventana_de_dias_no_llama_al_agente(monkeypatch):
+def test_mensaje_libre_sin_pendientes_no_suma_contexto_de_planes(monkeypatch):
     monkeypatch.setattr(telegram_bot, "AUTHORIZED_USER_ID", 999999)
-    database.guardar_config("DCA_SUELDO_MONTO_ESPERADO", "")  # nada pendiente
-    monkeypatch.setattr(telegram_bot.salary_dca, "hoy_esta_en_ventana_sueldo", lambda *a, **k: False)
-
-    llamadas = []
-    monkeypatch.setattr(telegram_bot.agente, "chat", lambda *a, **k: llamadas.append(1) or "no debería llegar acá")
-
-    asyncio.run(telegram_bot.chequear_sueldo_diario(_ContextFalso(_BotFalso())))
-
-    assert llamadas == []  # ni se llamó al agente para buscar el sueldo
+    recibido = {}
+    monkeypatch.setattr(telegram_bot.agente, "chat", lambda m, contexto_extra="": recibido.update(ctx=contexto_extra) or "ok")
+    asyncio.run(telegram_bot.mensaje_libre(_UpdateFalso(999999, "hola"), None))
+    assert "PLANES_DCA_PENDIENTES" not in recibido["ctx"]
 
 
-def test_dentro_de_la_ventana_de_dias_si_llama_al_agente(monkeypatch):
+def test_comando_balance_no_habilita_ejecutar_un_plan(monkeypatch):
+    """/balance llama a agente.chat con un mensaje sintético: adentro de ese turno no hay mensaje real del usuario."""
     monkeypatch.setattr(telegram_bot, "AUTHORIZED_USER_ID", 999999)
-    database.guardar_config("DCA_SUELDO_MONTO_ESPERADO", "")
-    monkeypatch.setattr(telegram_bot.salary_dca, "hoy_esta_en_ventana_sueldo", lambda *a, **k: True)
-
-    llamadas = []
-    monkeypatch.setattr(telegram_bot.agente, "chat", lambda *a, **k: llamadas.append(1) or "SIN_NOVEDADES")
-
-    asyncio.run(telegram_bot.chequear_sueldo_diario(_ContextFalso(_BotFalso())))
-
-    assert llamadas == [1]
-
-
-def test_pasa_el_rango_de_dias_guardado_como_enteros(monkeypatch):
-    monkeypatch.setattr(telegram_bot, "AUTHORIZED_USER_ID", 999999)
-    database.guardar_config("DCA_SUELDO_MONTO_ESPERADO", "")
-    database.guardar_config("DCA_SUELDO_DIA_DESDE", "28")
-    database.guardar_config("DCA_SUELDO_DIA_HASTA", "3")
-
-    args_recibidos = {}
-
-    def ventana_falsa(dia_desde, dia_hasta):
-        args_recibidos["dia_desde"] = dia_desde
-        args_recibidos["dia_hasta"] = dia_hasta
-        return False
-
-    monkeypatch.setattr(telegram_bot.salary_dca, "hoy_esta_en_ventana_sueldo", ventana_falsa)
-    asyncio.run(telegram_bot.chequear_sueldo_diario(_ContextFalso(_BotFalso())))
-
-    assert args_recibidos == {"dia_desde": 28, "dia_hasta": 3}
-
-
-# ─── traspaso pendiente (_chequear_traspaso_pendiente) ──────────────────────
-# Chequeo del traspaso manual a la cuenta de Inversión: barato cuando no hay
-# nada pendiente (no debería tocar Wallbit para nada), detecta la llegada de
-# fondos comparando contra la foto guardada, y se rinde solo después de
-# LIMITE_DIAS_ESPERA_TRASPASO días sin novedades.
-
-def test_traspaso_pendiente_no_llama_a_wallbit_si_no_hay_nada_pendiente(monkeypatch):
-    database.guardar_config("DCA_SUELDO_MONTO_ESPERADO", "")
-
-    def falla_si_se_llama():
-        raise AssertionError("no debería llamar a Wallbit si no hay traspaso pendiente")
-
-    monkeypatch.setattr(telegram_bot.wallbit_client, "get_stocks_balance", falla_si_se_llama)
-
-    assert telegram_bot._chequear_traspaso_pendiente() is None
-
-
-def test_traspaso_pendiente_detecta_llegada_de_fondos_y_arma_ticket(monkeypatch):
-    database.guardar_config("DCA_SUELDO_MONTO_ESPERADO", "500")
-    database.guardar_config("DCA_SUELDO_CASH_BASELINE", "100")
-    database.guardar_config("DCA_SUELDO_ESPERA_DESDE", date.today().isoformat())
-    monkeypatch.setattr(telegram_bot.wallbit_client, "get_stocks_balance", lambda: {"ok": True, "data": '{"cash": 610}'})
-
-    contextos_recibidos = []
-
-    def chat_falso(mensaje, contexto_extra=""):
-        contextos_recibidos.append(contexto_extra)
-        return "Ticket armado, confirmás?"
-
-    monkeypatch.setattr(telegram_bot.agente, "chat", chat_falso)
-
-    resultado = telegram_bot._chequear_traspaso_pendiente()
-
-    assert resultado == "Ticket armado, confirmás?"
-    assert "CHEQUEO_TRASPASO_SUELDO" in contextos_recibidos[0]
-    assert "510.00" in contextos_recibidos[0]  # delta real: 610 - 100
-    assert not database.obtener_config("DCA_SUELDO_MONTO_ESPERADO")  # se limpió el estado
-
-
-def test_traspaso_pendiente_no_detecta_si_todavia_no_llego_la_plata(monkeypatch):
-    database.guardar_config("DCA_SUELDO_MONTO_ESPERADO", "500")
-    database.guardar_config("DCA_SUELDO_CASH_BASELINE", "100")
-    database.guardar_config("DCA_SUELDO_ESPERA_DESDE", date.today().isoformat())
-    monkeypatch.setattr(telegram_bot.wallbit_client, "get_stocks_balance", lambda: {"ok": True, "data": '{"cash": 105}'})
-
-    resultado = telegram_bot._chequear_traspaso_pendiente()
-
-    assert resultado is None
-    assert database.obtener_config("DCA_SUELDO_MONTO_ESPERADO") == "500"  # sigue esperando
-
-
-def test_traspaso_pendiente_vencido_deja_de_esperar_sin_tocar_wallbit(monkeypatch):
-    from datetime import timedelta
-    hace_15_dias = (date.today() - timedelta(days=15)).isoformat()
-    database.guardar_config("DCA_SUELDO_MONTO_ESPERADO", "500")
-    database.guardar_config("DCA_SUELDO_CASH_BASELINE", "100")
-    database.guardar_config("DCA_SUELDO_ESPERA_DESDE", hace_15_dias)
-
-    def falla_si_se_llama():
-        raise AssertionError("no debería llamar a Wallbit si ya venció el plazo de espera")
-
-    monkeypatch.setattr(telegram_bot.wallbit_client, "get_stocks_balance", falla_si_se_llama)
-
-    resultado = telegram_bot._chequear_traspaso_pendiente()
-
-    assert resultado is not None
-    assert "10 días" in resultado
-    assert not database.obtener_config("DCA_SUELDO_MONTO_ESPERADO")  # se limpió el estado
+    visto = {}
+    monkeypatch.setattr(telegram_bot.agente, "chat", lambda *a, **k: visto.update(real=planes_dca.mensaje_usuario_actual()) or "ok")
+    asyncio.run(telegram_bot.balance(_UpdateFalso(999999, "/balance"), None))
+    assert visto["real"] is None

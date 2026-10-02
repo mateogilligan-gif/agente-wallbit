@@ -57,6 +57,7 @@ Usa la API pública de Wallbit + Claude (Anthropic) como cerebro + fuentes de da
 - Comprá y vendé acciones directamente desde Telegram
 - Siempre pide confirmación explícita antes de ejecutar
 - Sugiere tipo de orden (MARKET o LIMIT) según condiciones del mercado
+- Planes de DCA programados: hasta 5 compras fijas por mes (día, monto y reparto entre tickers), siempre con tu SÍ — ver sección [Planes DCA programados](#planes-dca-programados)
 
 ---
 
@@ -221,7 +222,7 @@ agente-wallbit/
 ├── reddit_client.py     # Discusión vía Reddit — requiere credenciales propias (1 tool)
 ├── apewisdom_client.py  # Volumen de menciones en Reddit, sin credenciales (1 tool)
 ├── research_campaigns.py # Campañas de research diario por ticker (ver sección propia)
-├── salary_dca.py         # Split de inversión de sueldo — cálculo de montos (1 tool)
+├── planes_dca.py         # Planes de DCA programados: fechas, reparto de plata, ticket y ejecución (2 tools)
 ├── fmp_client.py         # Financial Modeling Prep (opcional, pago) — noticias por ticker y screener por sector/market cap (3 tools)
 ├── telegram_bot.py      # Bot de Telegram + jobs automáticos
 ├── tests/               # Suite de tests (corre sin red, ver sección Tests)
@@ -231,7 +232,7 @@ agente-wallbit/
 ```
 
 Cada módulo de dominio registra sus propias tools con `@tool(...)` (de
-`tool_registry.py`) junto a la lógica que ya tenía — 41 tools en total,
+`tool_registry.py`) junto a la lógica que ya tenía — 39 tools en total,
 repartidas por dominio en vez de vivir todas juntas en `agente.py`.
 `research_campaigns.py` es la excepción: no registra ninguna tool propia
 (la tool `manage_research_campaign` vive en `database.py`, que es quien
@@ -286,43 +287,53 @@ los días pedidos, o antes si le pedís *"detené la campaña #1"*.
 Comandos vía chat: *"seguime estos tickers por N días"* (crear), *"cómo van
 mis campañas de research"* (listar), *"detené la campaña #X"* (detener).
 
-## Inversión automática de sueldo (DCA con split fijo)
+## Planes DCA programados
 
-Wallbit no tiene API para mover plata entre la cuenta corriente y la de
-Inversión, así que ese traspaso siempre lo hace la persona a mano desde la
-app — el bot está diseñado alrededor de esa limitación, no en contra de
-ella: avisa cuánto conviene transferir y nota solo cuándo esa plata ya llegó,
-sin que haya que confirmarlo por chat.
+Un plan DCA es una compra fija que se repite todos los meses: un día del
+mes, un monto en USD y una lista de tickers con su reparto. Podés tener
+hasta 5 planes. DCA es disciplina, no análisis: el bot compra lo que
+configuraste, sin research, sin noticias y sin sugerirte cambios.
 
-Un wizard de alta pregunta el monto aproximado del sueldo (identificador
-principal y obligatorio), un **rango de días** del mes en que suele llegar
-(ej. "del 28 al 3" — no un día fijo, porque no siempre cae exacto; este
-rango es lo que le permite al chequeo diario NO revisar las transacciones
-los 365 días del año, solo dentro de esa ventana), si hay algún dato que
-identifique a quien lo transfiere en las transacciones o si siempre es algo
-genérico (esto se pregunta siempre, no se asume — en la cuenta de Mateo el
-campo "Origen" da siempre "Wallbit LLC", el rail, no el empleador, pero eso
-no es necesariamente igual para otras cuentas), qué tickers incluir (máximo
-10, tope aplicado en código), y si el reparto es equitativo o personalizado
-por porcentaje.
+La plata tiene que estar ya en la **cuenta de Inversión** el día del plan.
+Wallbit no tiene una API para mover plata entre cuentas, así que esa
+transferencia la hacés vos desde la app.
 
-El % o monto fijo del sueldo a invertir **no** se pregunta en el alta —se
-pregunta (o reconfirma, con opción de mantener o cambiar) cada vez que se
-detecta un sueldo nuevo, porque puede variar mes a mes. Detectado el sueldo
-dentro de la ventana de días configurada, el bot calcula cuánto invertir con
-`calcular_monto_a_invertir_sueldo` (nunca el depósito completo, salvo 100%
-explícito) y avisa el monto exacto a transferir. A partir de ahí, en vez de
-esperar que la persona confirme por chat, el chequeo diario compara el
-efectivo de la cuenta de Inversión contra una foto de ese mismo valor
-tomada al avisar — si nota que llegó una plata parecida a la esperada (con
-10% de margen, porque el traspaso es manual), arma el ticket usando el
-monto real que llegó, con `calcular_split_sueldo` (el redondeo siempre lo
-hace código, nunca el modelo a mano). Si pasan más de 10 días sin
-detectarlo, deja de chequearlo solo (se puede avisar manualmente en
-cualquier momento). **Nunca ejecuta ninguna compra sin una respuesta SÍ
-explícita** — ni siquiera en estos chequeos automáticos.
+**Cómo crear un plan:** escribile al bot algo como *"armame un plan de DCA:
+el día 5, USD 100 en MELI, NU y AAPL en partes iguales"*. Si falta algún
+dato (día, monto, tickers o si el reparto es en partes iguales o con %
+propios), te lo pregunta. Antes de guardar te muestra el resumen
+(*"Plan 1: día 5, USD 100.00, MELI 33.33% / NU 33.33% / AAPL 33.34%"*) y te
+pide confirmación. También podés pedirle *"mostrame mis planes"*, *"pasá el
+plan 2 a USD 80"*, *"pausá el plan 1"*, *"reactivá el plan 1"* o
+*"borrá el plan 3"*.
 
-Paso a paso completo: ver `docs/inversion_sueldo_dca.md`.
+Al crear o editar, el bot valida por código:
+- que cada ticker exista en Wallbit (con `get_asset`; es verificación, no research);
+- que ninguna orden quede por debajo del **mínimo de Wallbit de USD 1 por
+  orden** (ej. USD 2 entre 3 tickers da USD 0.67 cada uno: te pide subir
+  el monto a USD 3 o usar menos tickers);
+- máximo 10 tickers por plan y 5 planes en total.
+
+Si creás o reactivás un plan después de su día de este mes, arranca el mes
+que viene. Así nunca te llega un ticket "atrasado" apenas lo configurás.
+
+**El día del plan** (chequeo diario a las 9am Argentina):
+- Si el día no existe en ese mes (31 en abril), se compra el último día del
+  mes. Si cae sábado o domingo, el lunes siguiente.
+- Si la plata alcanza, te llega el ticket con el monto por ticker. **Nunca
+  compra sin tu SÍ.** Si hay un solo ticket pendiente, respondés *SÍ*; si
+  hay más de uno, *SÍ plan N*. Con *NO* se saltea ese mes. La confirmación
+  se valida por código y de forma estricta: *"si querés cambiá el plan 2"*
+  no compra nada.
+- Si no alcanza, te avisa cuánto falta (una sola vez por mes y por plan) y
+  sigue probando en silencio los días siguientes. Si dos planes caen el
+  mismo día y la plata alcanza para uno solo, se arma el de menor número.
+- Si el bot estuvo apagado el día del plan, se pone al día dentro del mismo
+  mes (avisando que es una ejecución atrasada). Nunca recupera meses anteriores.
+- Un plan se compra como mucho una vez por mes. Si una orden falla en
+  Wallbit, las demás se mandan igual y te avisa cuál falló, sin reintentarla.
+
+Diseño completo y ejemplos de conversación: ver `docs/planes_dca.md`.
 
 ## Datos de empresa: modo gratis vs FMP pago
 
@@ -374,7 +385,7 @@ El bot corre cuatro tareas en segundo plano sin que tengas que pedirlas:
 - **Cada 30 minutos**: verifica alertas de precio de tu watchlist y notifica si alguna se disparó
 - **Todos los días a las 7am (Argentina)**: corre las campañas de research activas y avisa cuántas novedades encontró
 - **Todos los días a las 8am (Argentina)**: revisa si alguna empresa de tu portfolio reporta earnings esa semana y te avisa
-- **Todos los días a las 9am (Argentina)**: chequea si hay un traspaso de sueldo pendiente (barato, solo llama a Wallbit si corresponde) y, si HOY cae dentro de la ventana de días configurada, revisa si llegó un depósito nuevo que parezca sueldo — nunca ejecuta una compra solo
+- **Todos los días a las 9am (Argentina)**: revisa los planes DCA que tocan hoy y, si la plata ya está en la cuenta de Inversión, te manda el ticket de cada plan (si no alcanza, te avisa cuánto falta). No llama a Wallbit si ningún plan toca hoy y nunca compra sin tu SÍ
 
 ---
 

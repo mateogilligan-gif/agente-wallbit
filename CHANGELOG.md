@@ -2,6 +2,55 @@
 
 Registro de las actualizaciones del bot, en orden cronológico (la más reciente arriba).
 
+## 2026-10-02 — Planes DCA programados reemplazan la inversión automática de sueldo
+
+La inversión automática de sueldo dependía de detectar el depósito del
+sueldo en las transacciones y de esperar a que Mateo pasara la plata a mano
+a la cuenta de Inversión (Wallbit no tiene API para mover plata entre
+cuentas). Era compleja y nunca se llegó a configurar. Los planes DCA parten
+de que la plata ya está en la cuenta de Inversión: el día X de cada mes, el
+bot arma el ticket del monto fijo configurado y espera el SÍ. Son más
+simples, más predecibles y es lo que se quería en realidad. DCA es
+disciplina, no análisis: sin research ni noticias.
+
+### Agregado
+
+- **`planes_dca.py`**: hasta 5 planes (día del mes, monto fijo en USD,
+  hasta 10 tickers con reparto equitativo o por %). Toda la lógica son
+  funciones puras: fecha programada (último día del mes si el día no
+  existe, lunes si cae fin de semana), mes abierto (ponerse al día dentro
+  del mismo mes, nunca recuperar meses anteriores), reparto de la plata en
+  orden de número de plan descontando tickets pendientes, y mínimo de USD 1
+  por orden validado al configurar.
+- Tools **`gestionar_plan_dca`** (previsualizar/crear/listar/editar/pausar/
+  reactivar/borrar/descartar_ticket, con verificación de tickers vía
+  `get_asset`) y **`ejecutar_plan_dca`**, la única forma de comprar un plan.
+- **Confirmación por código**: el texto real que llega por Telegram viaja
+  hasta la tool (`ContextVar`). Matching estricto: solo "SÍ"/"CONFIRMO" o
+  "SÍ plan N" con varios tickets pendientes. Un cambio de estado atómico
+  impide comprar dos veces el mismo plan en el mismo mes.
+- Una ejecución cortada a la mitad nunca se reintenta: se avisa una vez
+  para revisar en la app qué órdenes salieron.
+- Tablas `planes_dca` y `ejecuciones_dca`; job diario
+  `chequear_planes_dca_diario` (9am Argentina) que no llama al LLM y no
+  llama a Wallbit si ningún plan toca hoy. Módulo de prompt `planes_dca`
+  (sin research, confirmación sin excepciones). Docs: `docs/planes_dca.md`.
+
+### Eliminado
+
+- `salary_dca.py`, sus 4 tools (`calcular_split_sueldo`,
+  `calcular_monto_a_invertir_sueldo`, `guardar_rango_dias_sueldo`,
+  `iniciar_espera_traspaso_sueldo`), el job `chequear_sueldo_diario`, el
+  módulo de prompt `inversion_sueldo_dca`, sus tests y
+  `docs/inversion_sueldo_dca.md`. No hubo datos que migrar. Total de tools:
+  de 41 a 39.
+
+### Corregido
+
+- `wallbit_client.get_asset` mandaba el parámetro `ticker`, pero el MCP de
+  Wallbit espera `symbol`: fallaba siempre con un error de validación.
+  Verificado contra la API real (solo lectura).
+
 ## 2026-10-01 — Fuente de datos de empresa opcional y paga: Financial Modeling Prep (FMP)
 
 Las noticias por ticker vía `brave_search` son búsqueda web genérica, con

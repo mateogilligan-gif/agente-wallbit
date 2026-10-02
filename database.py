@@ -23,6 +23,14 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS alertas_pct (id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT, umbral_pct REAL, direccion TEXT, referencia TEXT, activa INTEGER DEFAULT 1, fecha_creacion TEXT, fecha_disparada TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS campanas_research (id INTEGER PRIMARY KEY AUTOINCREMENT, tickers TEXT, fecha_inicio TEXT, dias INTEGER, activa INTEGER DEFAULT 1, ultima_corrida TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS research_hallazgos (id INTEGER PRIMARY KEY AUTOINCREMENT, campana_id INTEGER, ticker TEXT, fecha TEXT, tipo TEXT, titulo TEXT, url TEXT, fuente TEXT, clave_dedupe TEXT)''')
+    # Planes DCA programados (ver planes_dca.py). "numero" es el que ve el
+    # usuario (1-5, se reusa al borrar); "id" es interno y nunca se reusa,
+    # así el historial de ejecuciones de un plan borrado no se mezcla con el
+    # plan nuevo que tome su número.
+    c.execute('''CREATE TABLE IF NOT EXISTS planes_dca (id INTEGER PRIMARY KEY AUTOINCREMENT, numero INTEGER UNIQUE, nombre TEXT, dia INTEGER, monto_usd REAL, split_json TEXT, activo INTEGER DEFAULT 1, desde_periodo TEXT, creado TEXT, actualizado TEXT)''')
+    # Una fila por plan y mes (periodo 'YYYY-MM'): el UNIQUE es lo que impide
+    # que un mismo plan se compre dos veces en el mismo mes.
+    c.execute('''CREATE TABLE IF NOT EXISTS ejecuciones_dca (id INTEGER PRIMARY KEY AUTOINCREMENT, plan_id INTEGER, plan_numero INTEGER, periodo TEXT, estado TEXT, monto_usd REAL, split_json TEXT, texto_ticket TEXT, fecha_ticket TEXT, fecha_ejecucion TEXT, resultado_json TEXT, avisado INTEGER DEFAULT 0, UNIQUE(plan_id, periodo))''')
 
     # Migración: agregar avg_cost_manual si la tabla ya existía de antes sin esa columna
     try:
@@ -276,6 +284,135 @@ def registrar_bitacora(tipo, descripcion):
     c = conn.cursor()
     c.execute("INSERT INTO bitacora (fecha, tipo, descripcion) VALUES (?, ?, ?)",
               (datetime.now().isoformat(), tipo, descripcion))
+    conn.commit()
+    conn.close()
+
+# ─── Planes DCA programados ───────────────────────────────────────────────────
+#
+# Solo guardar/leer: toda la lógica (qué plan toca hoy, cuánta plata alcanza,
+# si se puede ejecutar) vive en planes_dca.py como funciones puras.
+
+def _filas_como_dicts(c):
+    columnas = [d[0] for d in c.description]
+    return [dict(zip(columnas, fila)) for fila in c.fetchall()]
+
+def crear_plan_dca(numero, nombre, dia, monto_usd, split_json, desde_periodo):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    ahora = datetime.now().isoformat()
+    c.execute(
+        "INSERT INTO planes_dca (numero, nombre, dia, monto_usd, split_json, activo, desde_periodo, creado, actualizado) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)",
+        (numero, nombre, dia, monto_usd, split_json, desde_periodo, ahora, ahora)
+    )
+    plan_id = c.lastrowid
+    conn.commit()
+    conn.close()
+    return plan_id
+
+def obtener_planes_dca(solo_activos=False):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    consulta = "SELECT * FROM planes_dca" + (" WHERE activo = 1" if solo_activos else "") + " ORDER BY numero ASC"
+    c.execute(consulta)
+    planes = _filas_como_dicts(c)
+    conn.close()
+    return planes
+
+def obtener_plan_dca(numero):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT * FROM planes_dca WHERE numero = ?", (numero,))
+    filas = _filas_como_dicts(c)
+    conn.close()
+    return filas[0] if filas else None
+
+def actualizar_plan_dca(numero, **campos):
+    """campos: cualquier subconjunto de nombre, dia, monto_usd, split_json, activo, desde_periodo."""
+    permitidos = {"nombre", "dia", "monto_usd", "split_json", "activo", "desde_periodo"}
+    campos = {k: v for k, v in campos.items() if k in permitidos}
+    if not campos:
+        return False
+    asignaciones = ", ".join(f"{k} = ?" for k in campos)
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(f"UPDATE planes_dca SET {asignaciones}, actualizado = ? WHERE numero = ?",
+              (*campos.values(), datetime.now().isoformat(), numero))
+    actualizado = c.rowcount > 0
+    conn.commit()
+    conn.close()
+    return actualizado
+
+def borrar_plan_dca(numero):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM planes_dca WHERE numero = ?", (numero,))
+    borrado = c.rowcount > 0
+    conn.commit()
+    conn.close()
+    return borrado
+
+def obtener_ejecuciones_dca():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT * FROM ejecuciones_dca ORDER BY periodo ASC, plan_numero ASC")
+    filas = _filas_como_dicts(c)
+    conn.close()
+    return filas
+
+def guardar_ejecucion_dca(plan_id, plan_numero, periodo, estado, monto_usd, split_json=None, texto_ticket=None):
+    """
+    Crea o actualiza la fila (plan, periodo). Solo pisa una fila en estado
+    'sin_fondos' (el aviso de falta de plata que se convierte en ticket
+    cuando la plata alcanza) — nunca una pendiente, en curso o ejecutada.
+    Devuelve True si guardó.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        """INSERT INTO ejecuciones_dca (plan_id, plan_numero, periodo, estado, monto_usd, split_json, texto_ticket, fecha_ticket)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(plan_id, periodo) DO UPDATE SET
+             estado = excluded.estado, monto_usd = excluded.monto_usd, split_json = excluded.split_json,
+             texto_ticket = excluded.texto_ticket, fecha_ticket = excluded.fecha_ticket
+           WHERE ejecuciones_dca.estado = 'sin_fondos'""",
+        (plan_id, plan_numero, periodo, estado, monto_usd, split_json, texto_ticket, datetime.now().isoformat())
+    )
+    guardado = c.rowcount > 0
+    conn.commit()
+    conn.close()
+    return guardado
+
+def cambiar_estado_ejecucion_dca(ejecucion_id, estado_esperado, estado_nuevo, resultado_json=None):
+    """
+    Cambio de estado atómico: solo cambia si la fila sigue en estado_esperado.
+    Es lo que hace que un SÍ repetido no compre dos veces — el segundo
+    intento de pasar de 'pendiente' a 'ejecutando' no encuentra la fila.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    if resultado_json is not None:
+        c.execute("UPDATE ejecuciones_dca SET estado = ?, resultado_json = ?, fecha_ejecucion = ? WHERE id = ? AND estado = ?",
+                  (estado_nuevo, resultado_json, datetime.now().isoformat(), ejecucion_id, estado_esperado))
+    else:
+        c.execute("UPDATE ejecuciones_dca SET estado = ? WHERE id = ? AND estado = ?",
+                  (estado_nuevo, ejecucion_id, estado_esperado))
+    cambiado = c.rowcount == 1
+    conn.commit()
+    conn.close()
+    return cambiado
+
+def marcar_avisado_ejecucion_dca(ejecucion_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE ejecuciones_dca SET avisado = 1 WHERE id = ?", (ejecucion_id,))
+    conn.commit()
+    conn.close()
+
+def borrar_ejecuciones_abiertas_dca(plan_id):
+    """Borra tickets pendientes y avisos de falta de plata de un plan (al editarlo, pausarlo o borrarlo). Nunca toca lo ejecutado."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM ejecuciones_dca WHERE plan_id = ? AND estado IN ('pendiente', 'sin_fondos')", (plan_id,))
     conn.commit()
     conn.close()
 
@@ -592,7 +729,7 @@ def _tool_manage_goals(inputs: dict):
 
 @tool(
     "save_config",
-    "Guarda/lee configuración de clave-valor genérica (ej. DCA_SUELDO_MONTO_APROX, DCA_SUELDO_SPLIT, etc).",
+    "Guarda/lee configuración de clave-valor genérica (ej. MODO_DATOS_EMPRESA).",
     {"type": "object", "properties": {"accion": {"type": "string", "enum": ["guardar", "leer"]}, "clave": {"type": "string"}, "valor": {"type": "string"}}, "required": ["accion", "clave"]}
 )
 def _tool_save_config(inputs: dict):
