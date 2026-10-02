@@ -2,6 +2,25 @@
 
 Registro de las actualizaciones del bot, en orden cronológico (la más reciente arriba).
 
+## 2026-10-02 — list_transactions alineado con el schema real de Wallbit
+
+### Corregido
+
+- **`wallbit_client.list_transactions`**: Wallbit solo acepta `limit` 10, 20
+  o 50. Si el modelo pedía otro número (ej. 30), la consulta se rechazaba.
+  Ahora `limit` se redondea **hacia arriba** al valor permitido más cercano,
+  con tope 50 (5 → 10, 30 → 50). Nunca devuelve menos de lo pedido; para
+  más de 50 está `page`. El default sigue siendo 50.
+
+### Agregado
+
+- La tool `list_transactions` expone `page` y `from_date`/`to_date`
+  (AAAA-MM-DD), validados localmente antes de llamar: fechas reales,
+  `from_date` no posterior a `to_date` y `page` entero mayor o igual a 1.
+  Un input inválido devuelve `ok: false` con un mensaje claro, sin tocar
+  Wallbit. Los filtros de moneda, estado, tipo y monto no se exponen por ahora.
+- Verificado con una consulta real de solo lectura (`limit`, `page` y fechas).
+
 ## 2026-10-02 — create_trade con el schema real de Wallbit y GUARDAR para guardar planes
 
 ### Corregido

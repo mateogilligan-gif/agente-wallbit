@@ -2,6 +2,7 @@ import requests
 import os
 import json
 import re
+from datetime import date
 from typing import Optional
 
 from tool_registry import tool
@@ -109,8 +110,63 @@ def get_checking_balance() -> dict:
 def get_stocks_balance() -> dict:
     return _call_tool("get_stocks_balance")
 
-def list_transactions(limit: int = 50) -> dict:
-    return _call_tool("list_transactions", {"limit": limit})
+# Wallbit solo acepta estos tamaños de página en list_transactions.
+LIMITES_TRANSACCIONES = (10, 20, 50)
+
+
+def redondear_limite_transacciones(limit) -> int:
+    """
+    Redondea HACIA ARRIBA al tamaño de página permitido más cercano (10, 20
+    o 50), con tope 50 — nunca devuelve menos de lo pedido salvo que se pida
+    más de 50 (ahí hay que usar 'page'). Ej: 5 -> 10, 30 -> 50, 200 -> 50.
+    """
+    for permitido in LIMITES_TRANSACCIONES:
+        if limit <= permitido:
+            return permitido
+    return LIMITES_TRANSACCIONES[-1]
+
+
+def _validar_fecha(nombre: str, valor) -> tuple:
+    """(date, None) si es una fecha real en formato Y-m-d, (None, error) si no."""
+    if not isinstance(valor, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", valor):
+        return None, f"{nombre} inválido: '{valor}' (tiene que tener formato AAAA-MM-DD, ej. 2026-10-01)"
+    try:
+        return date.fromisoformat(valor), None
+    except ValueError:
+        return None, f"{nombre} inválido: '{valor}' no es una fecha real"
+
+
+def list_transactions(limit: int = 50, page: Optional[int] = None,
+                      from_date: Optional[str] = None, to_date: Optional[str] = None) -> dict:
+    """
+    Transacciones de Wallbit, con paginación y rango de fechas opcionales.
+    Se valida todo localmente antes de llamar (Wallbit rechaza un limit que
+    no sea 10/20/50 y no conviene mandarle fechas o páginas inválidas).
+    """
+    if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
+        return {"ok": False, "error": f"limit inválido: {limit!r} (tiene que ser un entero mayor o igual a 1)"}
+    params = {"limit": redondear_limite_transacciones(limit)}
+
+    if page is not None:
+        if not isinstance(page, int) or isinstance(page, bool) or page < 1:
+            return {"ok": False, "error": f"page inválido: {page!r} (tiene que ser un entero mayor o igual a 1)"}
+        params["page"] = page
+
+    desde = hasta = None
+    if from_date is not None:
+        desde, error = _validar_fecha("from_date", from_date)
+        if error:
+            return {"ok": False, "error": error}
+        params["from_date"] = from_date
+    if to_date is not None:
+        hasta, error = _validar_fecha("to_date", to_date)
+        if error:
+            return {"ok": False, "error": error}
+        params["to_date"] = to_date
+    if desde and hasta and desde > hasta:
+        return {"ok": False, "error": f"from_date ({from_date}) no puede ser posterior a to_date ({to_date})"}
+
+    return _call_tool("list_transactions", params)
 
 def get_asset(ticker: str) -> dict:
     # El MCP de Wallbit espera el parámetro "symbol" (con "ticker" rechaza
@@ -439,11 +495,22 @@ def _tool_get_stocks_balance(inputs: dict):
 
 @tool(
     "list_transactions",
-    "Transacciones recientes Wallbit.",
-    {"type": "object", "properties": {"limit": {"type": "integer"}}, "required": []}
+    "Transacciones Wallbit, de la más reciente a la más vieja. limit se redondea hacia arriba a 10, 20 o 50 (máximo 50 por página; "
+    "para ver más, pedir page=2, 3...). Rango opcional con from_date/to_date en formato AAAA-MM-DD.",
+    {"type": "object", "properties": {
+        "limit": {"type": "integer", "description": "Cantidad por página (se redondea hacia arriba a 10, 20 o 50)"},
+        "page": {"type": "integer", "description": "Número de página, desde 1"},
+        "from_date": {"type": "string", "description": "Fecha inicio AAAA-MM-DD"},
+        "to_date": {"type": "string", "description": "Fecha fin AAAA-MM-DD"}
+    }, "required": []}
 )
 def _tool_list_transactions(inputs: dict):
-    return list_transactions(inputs.get("limit", 50))
+    return list_transactions(
+        limit=inputs.get("limit", 50),
+        page=inputs.get("page"),
+        from_date=inputs.get("from_date"),
+        to_date=inputs.get("to_date"),
+    )
 
 
 @tool(

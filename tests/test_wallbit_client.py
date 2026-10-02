@@ -9,6 +9,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import pytest
 import wallbit_client
 
 
@@ -191,3 +192,60 @@ def test_obtener_cash_inversion_none_si_no_hay_ningun_campo_de_cash():
 
 def test_obtener_cash_inversion_none_si_no_es_json_valido():
     assert wallbit_client.obtener_cash_inversion({"ok": True, "data": "esto no es json"}) is None
+
+
+# ─── list_transactions: limit redondeado hacia arriba, page y fechas ───────
+# Wallbit solo acepta limit 10/20/50. Todo se valida antes de llamar: un
+# input inválido devuelve ok False sin tocar _call_tool.
+
+@pytest.mark.parametrize("pedido,enviado", [(1, 10), (5, 10), (10, 10), (11, 20), (20, 20), (21, 50), (30, 50), (50, 50), (200, 50)])
+def test_list_transactions_redondea_limit_hacia_arriba(monkeypatch, pedido, enviado):
+    llamadas = _capturar_llamadas(monkeypatch)
+    wallbit_client.list_transactions(limit=pedido)
+    assert llamadas == [("list_transactions", {"limit": enviado})]
+
+
+def test_list_transactions_default_sigue_siendo_50(monkeypatch):
+    llamadas = _capturar_llamadas(monkeypatch)
+    wallbit_client.list_transactions()
+    assert llamadas == [("list_transactions", {"limit": 50})]
+
+
+def test_list_transactions_manda_page_y_fechas(monkeypatch):
+    llamadas = _capturar_llamadas(monkeypatch)
+    wallbit_client.list_transactions(limit=20, page=2, from_date="2026-09-01", to_date="2026-09-30")
+    assert llamadas == [("list_transactions", {"limit": 20, "page": 2, "from_date": "2026-09-01", "to_date": "2026-09-30"})]
+
+
+def test_list_transactions_acepta_una_sola_fecha_y_mismo_dia(monkeypatch):
+    llamadas = _capturar_llamadas(monkeypatch)
+    wallbit_client.list_transactions(from_date="2026-10-01")
+    wallbit_client.list_transactions(from_date="2026-10-01", to_date="2026-10-01")
+    assert llamadas[0][1] == {"limit": 50, "from_date": "2026-10-01"}
+    assert llamadas[1][1] == {"limit": 50, "from_date": "2026-10-01", "to_date": "2026-10-01"}
+
+
+@pytest.mark.parametrize("kwargs,campo", [
+    ({"limit": 0}, "limit"), ({"limit": -5}, "limit"), ({"limit": "20"}, "limit"), ({"limit": True}, "limit"),
+    ({"page": 0}, "page"), ({"page": -1}, "page"), ({"page": 1.5}, "page"), ({"page": "2"}, "page"),
+    ({"from_date": "2026-02-30"}, "from_date"), ({"from_date": "01/10/2026"}, "from_date"),
+    ({"to_date": "2026-13-01"}, "to_date"), ({"to_date": "2026-1-5"}, "to_date"), ({"to_date": 20261001}, "to_date"),
+    ({"from_date": "2026-10-05", "to_date": "2026-10-01"}, "from_date"),
+])
+def test_list_transactions_invalido_no_llama_a_wallbit(monkeypatch, kwargs, campo):
+    llamadas = _capturar_llamadas(monkeypatch)
+    r = wallbit_client.list_transactions(**kwargs)
+    assert r["ok"] is False and campo in r["error"]
+    assert llamadas == []
+
+
+def test_list_transactions_no_manda_filtros_no_expuestos(monkeypatch):
+    llamadas = _capturar_llamadas(monkeypatch)
+    wallbit_client._tool_list_transactions({"limit": 30, "page": 3, "currency": "USD", "status": "COMPLETED", "type": "TRADE", "from_amount": 10})
+    assert llamadas == [("list_transactions", {"limit": 50, "page": 3})]
+
+
+def test_tool_list_transactions_schema_expone_solo_page_y_fechas():
+    from tool_registry import TOOL_REGISTRY
+    props = TOOL_REGISTRY["list_transactions"]["schema"]["input_schema"]["properties"]
+    assert set(props) == {"limit", "page", "from_date", "to_date"}
