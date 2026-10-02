@@ -44,6 +44,7 @@ para cuando Mateo se suscriba):
 """
 import os
 import json
+import re
 import requests
 from datetime import datetime
 from typing import Optional
@@ -72,6 +73,13 @@ AVISO_MODO_NO_CONFIGURADO = (
 )
 
 _cache = {}
+
+
+def _sin_api_key(texto: str, api_key: str = None) -> str:
+    """Tapa la apikey de FMP en un texto (ej. el mensaje de una excepción de requests, que incluye la URL)."""
+    if api_key:
+        texto = texto.replace(api_key, "***")
+    return re.sub(r"(apikey=)[^&\s'\"]+", r"\1***", texto, flags=re.IGNORECASE)
 
 
 def _is_cached(key, max_minutes=30):
@@ -238,7 +246,10 @@ def _fmp_get(path: str, params: dict, timeout: int = 10) -> tuple:
     try:
         r = requests.get(f"{FMP_BASE_URL}{path}", params=query, timeout=timeout)
     except requests.exceptions.RequestException as e:
-        return False, None, f"Error de red/timeout llamando a FMP: {e}"
+        # El texto de la excepción de requests trae la URL completa, con
+        # ?apikey=... adentro: se tapa antes de devolverlo, porque este
+        # mensaje llega al LLM y queda guardado en la bitácora.
+        return False, None, f"Error de red/timeout llamando a FMP: {_sin_api_key(str(e), api_key)}"
 
     try:
         body = r.json()

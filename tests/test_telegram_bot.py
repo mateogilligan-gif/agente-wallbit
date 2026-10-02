@@ -197,3 +197,11 @@ def test_comando_balance_no_habilita_ejecutar_un_plan(monkeypatch):
     monkeypatch.setattr(telegram_bot.agente, "chat", lambda *a, **k: visto.update(real=planes_dca.mensaje_usuario_actual()) or "ok")
     asyncio.run(telegram_bot.balance(_UpdateFalso(999999, "/balance"), None))
     assert visto["real"] is None
+
+
+def test_httpx_no_loguea_requests_en_info():
+    """httpx loguea en INFO cada request con la URL completa, que en Telegram
+    lleva el token del bot adentro: tiene que quedar en WARNING o más."""
+    import logging
+    assert logging.getLogger("httpx").getEffectiveLevel() >= logging.WARNING
+    assert not logging.getLogger("httpx").isEnabledFor(logging.INFO)

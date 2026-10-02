@@ -21,6 +21,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# httpx (lo usan python-telegram-bot y el SDK de Anthropic) loguea en INFO
+# cada request con la URL completa — y la URL de Telegram lleva el token del
+# bot adentro (https://api.telegram.org/bot<TOKEN>/...). En WARNING deja de
+# escribir esas líneas. El resto de los loggers se revisó y no escribe
+# claves en INFO: Wallbit y Brave mandan la key en headers, y requests/urllib3
+# (FMP manda la apikey en la URL) solo loguean URLs en DEBUG.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 
 def es_autorizado(update: Update) -> bool:
     return update.effective_user.id == AUTHORIZED_USER_ID

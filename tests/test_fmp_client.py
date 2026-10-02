@@ -461,3 +461,25 @@ def test_titulo_con_contenido_sospechoso_viaja_como_texto_plano():
         resultado = fmp_client._tool_noticias_empresa({"ticker": "AAPL"})
     assert resultado["data"]["noticias"][0]["titulo"] == titulo_malicioso
     assert isinstance(resultado["data"]["noticias"][0]["titulo"], str)
+
+
+# ─── La apikey no se filtra en mensajes de error ───────────────────────────
+# requests incluye la URL completa (con ?apikey=...) en el texto de sus
+# excepciones de red; ese texto llega al LLM y a la bitácora.
+
+def test_error_de_red_no_incluye_la_apikey(con_fmp_api_key):
+    import requests as requests_mod
+    error = requests_mod.exceptions.ConnectionError(
+        "HTTPSConnectionPool(host='financialmodelingprep.com', port=443): Max retries exceeded with url: "
+        "/stable/news/stock?symbols=AAPL&limit=10&apikey=fake-key-de-test (Caused by NameResolutionError)"
+    )
+    with patch("fmp_client.requests.get", side_effect=error):
+        ok, data, mensaje = fmp_client._fmp_get("/news/stock", {"symbols": "AAPL"})
+    assert ok is False
+    assert "fake-key-de-test" not in mensaje
+    assert "apikey=***" in mensaje
+
+
+def test_sin_api_key_tapa_la_key_aunque_no_venga_como_parametro():
+    assert fmp_client._sin_api_key("falló con clave-secreta-123 adentro", "clave-secreta-123") == "falló con *** adentro"
+    assert fmp_client._sin_api_key("url?a=1&apikey=XYZ&b=2") == "url?a=1&apikey=***&b=2"

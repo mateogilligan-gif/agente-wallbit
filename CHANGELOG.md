@@ -2,6 +2,24 @@
 
 Registro de las actualizaciones del bot, en orden cronológico (la más reciente arriba).
 
+## 2026-10-02 — El log ya no guarda el token de Telegram ni la apikey de FMP
+
+### Corregido (seguridad)
+
+- **`bot.log` guardaba el token del bot de Telegram en texto plano**:
+  `httpx` (lo usan python-telegram-bot y el SDK de Anthropic) loguea en
+  INFO cada request con la URL completa, y la URL de Telegram lleva el
+  token adentro (unas 400.000 líneas). Ahora el logger `httpx` queda en
+  WARNING. Se revisaron los demás loggers que escribían en `bot.log`
+  (apscheduler, telegram.ext, anthropic, yfinance): ninguno escribe claves.
+  Wallbit y Brave mandan su key en headers, y requests/urllib3 solo loguean
+  URLs en DEBUG.
+- **FMP**: el mensaje de un error de red de `requests` incluye la URL con
+  `?apikey=...`, y ese texto llegaba al LLM y a la bitácora de la DB. Ahora
+  se tapa (`apikey=***`) antes de devolverlo. No hubo filtración real:
+  `FMP_API_KEY` todavía no está configurada.
+- Se vació `bot.log` para sacar las líneas viejas con el token.
+
 ## 2026-10-02 — list_transactions alineado con el schema real de Wallbit
 
 ### Corregido
