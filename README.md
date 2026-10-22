@@ -17,7 +17,8 @@ Usa la API pública de Wallbit + Claude (Anthropic) como cerebro + fuentes de da
 - El agente investiga como el jefe de un equipo de analistas de un bróker: verifica que el ticker sea el correcto antes de investigar (evita confundir empresas con tickers parecidos), nunca contesta precios o noticias desde memoria (siempre busca en el momento), y cierra cada análisis con riesgos clave y fuentes citadas
 - Fundamentals completos: P/E, market cap, márgenes, crecimiento, consenso de analistas (Yahoo Finance)
 - Estado de resultados anual: ingresos, utilidad neta, EBITDA
-- Insiders: quién está comprando o vendiendo dentro de la empresa
+- Insiders: quién está comprando o vendiendo dentro de la empresa (Yahoo Finance, actividad general)
+- Compras de insiders desde la SEC (Form 4): reporte a pedido de las compras de directivos, directores y accionistas de más del 10%, de una empresa o de todo tu portfolio + watchlist — ver sección [Compras de insiders](#compras-de-insiders-form-4)
 - Historial de dividendos
 - Filings oficiales de la SEC: 10-K, 10-Q, 8-K
 - Búsqueda de texto completo en SEC EDGAR: encuentra frases o riesgos específicos DENTRO del contenido de los filings (ej "supply chain", "customer concentration"), no solo lista qué documentos existen
@@ -188,6 +189,7 @@ Escribile a tu bot en Telegram en lenguaje natural:
 "Armame una tesis de inversión para AMZN"
 "Analizá el sector de semiconductores"
 "¿Mis empresas reportan earnings esta semana?"
+"¿Compró algún directivo de mis empresas en los últimos 90 días?"
 "Comprá $100 de VOO" (pide confirmación antes de ejecutar)
 ```
 
@@ -224,6 +226,7 @@ agente-wallbit/
 ├── research_campaigns.py # Campañas de research diario por ticker (ver sección propia)
 ├── planes_dca.py         # Planes de DCA programados: fechas, reparto de plata, ticket y ejecución (2 tools)
 ├── fmp_client.py         # Financial Modeling Prep (opcional, pago) — noticias por ticker y screener por sector/market cap (3 tools)
+├── insiders.py           # Compras de insiders desde los Form 4 de SEC EDGAR, a pedido (2 tools)
 ├── telegram_bot.py      # Bot de Telegram + jobs automáticos
 ├── tests/               # Suite de tests (corre sin red, ver sección Tests)
 ├── requirements.txt     # Dependencias de Python
@@ -232,7 +235,7 @@ agente-wallbit/
 ```
 
 Cada módulo de dominio registra sus propias tools con `@tool(...)` (de
-`tool_registry.py`) junto a la lógica que ya tenía — 39 tools en total,
+`tool_registry.py`) junto a la lógica que ya tenía — 41 tools en total,
 repartidas por dominio en vez de vivir todas juntas en `agente.py`.
 `research_campaigns.py` es la excepción: no registra ninguna tool propia
 (la tool `manage_research_campaign` vive en `database.py`, que es quien
@@ -251,7 +254,7 @@ El módulo **Bull vs Bear** hace dos llamadas separadas a Claude con instruccion
 | Wallbit API | Saldo, posiciones, historial, ejecución de órdenes | Incluido con cuenta Wallbit |
 | Yahoo Finance | Fundamentals, historial, insiders, dividendos, earnings calendar | Gratis |
 | FRED (Federal Reserve) | Inflación, tasas, desempleo, PIB, macro | Gratis |
-| SEC EDGAR | Filings 10-K, 10-Q, 8-K | Gratis |
+| SEC EDGAR | Filings 10-K, 10-Q, 8-K y Form 4 (compras de insiders) | Gratis |
 | Brave Search | Noticias financieras en tiempo real | Gratis hasta 2000 búsquedas/mes |
 | Google News RSS | Prensa local por país/idioma (cualquier mercado del mundo) | Gratis, sin API key |
 | GDELT Project | Índice global de noticias de prácticamente todos los países | Gratis, sin API key |
@@ -336,6 +339,47 @@ que viene. Así nunca te llega un ticket "atrasado" apenas lo configurás.
   Wallbit, las demás se mandan igual y te avisa cuál falló, sin reintentarla.
 
 Diseño completo y ejemplos de conversación: ver `docs/planes_dca.md`.
+
+## Compras de insiders (Form 4)
+
+Cuando un directivo compra acciones de su propia empresa con su plata, es
+una de las señales que más siguen los analistas. Las ventas tienen mucho
+ruido (planes programados, impuestos) y las acciones que reciben como
+compensación no son una decisión de inversión. Por eso este reporte
+muestra **solo compras** (código "P" del Form 4 de la SEC; incluye compras
+privadas, por eso dice "compra" y no "compra en el mercado").
+
+Es **solo a pedido**: no hay avisos automáticos. Ejemplos:
+
+```
+"¿Compró algún directivo de mis empresas?"      (portfolio + watchlist, últimos 90 días)
+"Compras de insiders de MELI en el último año"
+"Form 4 de NU, todas las compras sin mínimo"
+"Cambiá el monto mínimo de insiders a 100.000"
+```
+
+- **Fuente**: SEC EDGAR, Form 4 (los insiders lo presentan dentro de los 2
+  días hábiles). Gratis y oficial.
+- **Monto mínimo**: por defecto USD 50.000 por persona y Form 4
+  (configurable desde el chat; 0 = todas las compras). Una compra sin
+  precio informado se muestra como "monto no informado" y no se filtra.
+- **Qué muestra por compra**: fecha, nombre, cargo, acciones, precio,
+  monto, cuánto aumentó su tenencia y el link al Form 4. Marca "VARIOS
+  INSIDERS COMPRANDO" si compraron 2 o más personas distintas, separa a los
+  accionistas de más del 10% (suelen ser fondos) de los directivos y marca
+  las compras hechas bajo un plan 10b5-1 como "compra programada".
+- **Emisores extranjeros** (presentan 20-F/40-F, ej. NU): sus directivos
+  presentan Form 4 desde el 18-03-2026; sus accionistas de más del 10% no.
+  El reporte lo aclara y pide verificar moneda y clase de acción.
+- **ETFs y fondos**: "sin datos" (no tienen directivos que presenten Form 4).
+- **Velocidad**: respeta el límite de la SEC (máximo 8 pedidos por segundo)
+  y guarda los Form 4 ya bajados en `cache/form4/` (no cambian nunca; la
+  carpeta está en `.gitignore`). Medido con ~33 empresas: ~30 s la primera
+  vez, ~5 s después. Si la SEC corta o pasan 100 s, devuelve lo que pudo
+  armar y lista las empresas que quedaron sin revisar.
+
+Para la actividad general de insiders (compras y ventas mezcladas) sigue
+estando `yf_insiders` (Yahoo Finance).
 
 ## Datos de empresa: modo gratis vs FMP pago
 

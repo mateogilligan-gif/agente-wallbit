@@ -468,7 +468,7 @@ def fred_get_series(serie: str, observaciones: int = 12) -> dict:
 # ─── SEC EDGAR ────────────────────────────────────────────────────────────────
 
 EDGAR_FULLTEXT_URL = "https://efts.sec.gov/LATEST/search-index"
-EDGAR_HEADERS = {"User-Agent": "agente-wallbit mateo@wallbit.io"}
+EDGAR_HEADERS = {"User-Agent": "agente-wallbit mateo.gilligan@wallbit.io"}
 
 _cik_cache = None
 

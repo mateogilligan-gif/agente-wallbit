@@ -2,6 +2,61 @@
 
 Registro de las actualizaciones del bot, en orden cronológico (la más reciente arriba).
 
+## 2026-10-22 — Reporte de compras de insiders desde la SEC (Form 4)
+
+### Agregado
+
+- **`insiders.py`** con dos tools nuevas (41 en total):
+  - `reporte_insiders(ticker=None, dias=90, monto_minimo=None)`: compras de
+    directivos, directores y accionistas de más del 10% según los Form 4 de
+    SEC EDGAR. Con ticker revisa esa empresa; sin ticker, el portfolio de
+    Wallbit (sin la fila "USD") más la watchlist, sin duplicados. Solo a
+    pedido, sin jobs ni avisos automáticos.
+  - `configurar_insiders_monto_minimo(monto)`: guarda
+    `INSIDERS_MONTO_MINIMO` (default USD 50.000; 0 = todas), validado por
+    código.
+- Solo cuenta el código de transacción "P" (verificado en la página de
+  códigos de la SEC: "Open market or private purchase") en la tabla no
+  derivada y con adquisición "A". Ventas, opciones, compensación y demás
+  códigos se descartan.
+- Varias compras de una persona el mismo día se suman (acciones, precio
+  promedio ponderado, rango y cantidad de operaciones). El monto mínimo se
+  evalúa sobre el total de la persona en ese Form 4.
+- Enmiendas 4/A: reemplazan a su original (mismas personas +
+  `dateOfOriginalSubmission`). Si no hay original emparejable, o un fondo y
+  su gestor presentan Form 4 separados por la misma compra, se deduplica
+  por fecha + acciones + precio + tenencia final.
+- Casilla 10b5-1 (`aff10b5One`, verificada en el schema oficial
+  `ownership4Document.xsd`): la compra se marca "compra programada (plan
+  10b5-1)", sin filtrarla. Es una casilla por Form 4, no por transacción.
+- Emisores extranjeros: se decide por el último reporte anual (20-F/40-F vs
+  10-K). Desde el 18-03-2026 sus directivos presentan Form 4 (NU y TSM ya
+  los tienen), así que se procesan como cualquier empresa, con nota
+  aclaratoria y aviso de verificar moneda y clase de acción. "Sin datos
+  (emisor extranjero)" queda para los que no tienen ningún Form 4.
+- ETFs y fondos: "sin datos" (mapa `company_tickers_mf.json` de la SEC o
+  formularios de fondo como 485BPOS/N-30D). Ticker inexistente (ni en la
+  SEC ni en Wallbit): error claro sin consultar más.
+- Límite de la SEC: freno compartido entre threads (máximo 8 pedidos por
+  segundo), 4 empresas y 4 XML en paralelo, cache en disco de los XML en
+  `cache/form4/` (en `.gitignore`), corte a los 100 s. Ante un 403/429 no
+  sale ningún pedido más y el reporte lista lo que quedó sin revisar.
+- Módulo de prompt `insiders_compras`: usar `reporte_insiders` para
+  compras y dejar `yf_insiders` para la actividad general; mostrar los
+  datos sin recomendar y cerrar con "Que un insider compre no garantiza
+  que la acción suba: es un dato más para tu análisis".
+- Tests sin red con Form 4 reales de la SEC en `tests/fixtures/form4/`.
+
+### Cambiado
+
+- `EDGAR_HEADERS` (market_data.py) usa `mateo.gilligan@wallbit.io` como
+  contacto en el User-Agent (la SEC pide un contacto real).
+
+### Medido
+
+- Corrida real de solo lectura (33 tickers de portfolio + watchlist,
+  90 días): 29,9 s sin cache (213 pedidos a la SEC), 5,0 s con cache.
+
 ## 2026-10-02 — Lectura real del efectivo de la cuenta de Inversión
 
 ### Corregido
